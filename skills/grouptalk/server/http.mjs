@@ -2,8 +2,10 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
+import { pipeline } from 'node:stream/promises';
 import { HttpError } from './room.mjs';
 import { clientAddress, lookupClientMac } from './neighbors.mjs';
+import { indexSourceFiles } from './source-files.mjs';
 
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -40,13 +42,15 @@ export function invitationLinks({ port, host, invite, interfaces = networkInterf
 }
 
 export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac }) {
+  const source = await indexSourceFiles(room);
+  const snapshot = (member) => ({ ...room.snapshot(member), sourceFiles: source.files });
   const streams = new Set();
   let flushTimer;
   const flush = () => {
     flushTimer = null;
     for (const stream of streams) {
       if (stream.res.writableLength > 2_000_000) { stream.res.destroy(); continue; }
-      stream.res.write(`event: state\ndata: ${JSON.stringify(room.snapshot(stream.member))}\n\n`);
+      stream.res.write(`event: state\ndata: ${JSON.stringify(snapshot(stream.member))}\n\n`);
     }
   };
   const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, 35); };
@@ -81,14 +85,24 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       if (member.role === 'host' && !isHostConnection(req, url)) throw new HttpError(403, '房主入口仅可在开房电脑上使用');
       if (url.pathname === '/api/bootstrap' && req.method === 'GET') {
         observe(req, member.id);
-        return json(res, 200, room.snapshot(member));
+        return json(res, 200, snapshot(member));
+      }
+      const sourceFile = url.pathname.match(/^\/api\/source-files\/([\da-f-]+)\/(\d+)$/);
+      if (sourceFile && req.method === 'GET') {
+        const { file, size, name } = await source.read(sourceFile[1], Number(sourceFile[2]));
+        res.writeHead(200, {
+          'content-type': 'application/octet-stream', 'content-length': size, 'cache-control': 'no-store',
+          'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (char) => '%' + char.charCodeAt(0).toString(16))}`,
+        });
+        if (!size) { await file.close(); return res.end(); }
+        return await pipeline(file.createReadStream({ end: size - 1 }), res);
       }
       if (url.pathname === '/api/events' && req.method === 'GET') {
         observe(req, member.id);
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         const stream = { member, res }; streams.add(stream);
         const disconnect = room.connect(member);
-        res.write(`event: state\ndata: ${JSON.stringify(room.snapshot(member))}\n\n`);
+        res.write(`event: state\ndata: ${JSON.stringify(snapshot(member))}\n\n`);
         const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
         res.on('close', () => { clearInterval(heartbeat); streams.delete(stream); disconnect(); });
         return;

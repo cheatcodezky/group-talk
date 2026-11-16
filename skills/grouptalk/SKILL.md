@@ -25,6 +25,6 @@ Use the launch scripts bundled beside this file. Get the absolute path from the 
 
 If startup fails, use the first concrete error to recover and retry the launcher. For a download error, check access to `nodejs.org`. If a Unix installer utility is missing, install it if available or use a compatible Node.js from the [official distributions](https://nodejs.org/en/download). For a missing Codex executable, locate the installed runtime and set `GROUPTALK_CODEX_BIN` to its absolute path. If none exists, install the [official Codex CLI](https://learn.chatgpt.com/docs/cli) and use its binary. Have the host complete sign-in if needed, then retry and verify health before sharing links.
 
-Opening the room makes the source history available to members who join. The invitation link grants room access. Use a trusted LAN where the intended members can reach the host.
+Members first see the source conversation's shared messages and Codex replies. Downloads are available for supported documents and images linked by those replies inside the workspace. The invitation link grants room access. Use a trusted LAN where the intended members can reach the host.
 
 GroupTalk runs Codex under Ask for approval. The owner uses the locally opened room to review member execution requests and any additional permissions Codex requests during implementation. A decision applies to the current request. Leave decisions to the host using the GroupTalk approval dialog.

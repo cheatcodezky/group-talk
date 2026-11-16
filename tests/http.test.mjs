@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { serve, invitationLinks } from '../skills/grouptalk/server/http.mjs';
-import { fixture, message, until } from './helpers.mjs';
+import { FakeAgent, fixture, message, until } from './helpers.mjs';
 import { networkInterfaces } from 'node:os';
 import { request } from 'node:http';
 import { clientAddress, macFromNeighbors } from '../skills/grouptalk/server/neighbors.mjs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息与任务', async (t) => {
   const f = await fixture();
@@ -147,4 +150,46 @@ test('识别 IPv4 映射地址及各平台邻居记录，仅返回对应 IP 的�
   assert.equal(macFromNeighbors(`${ip} dev eth0 lladdr 0a:1b:02:33:44:05 REACHABLE`, ip), '0a:1b:02:33:44:05');
   assert.equal(macFromNeighbors(`${ip} dev eth0 INCOMPLETE\n192.168.31.43 dev eth0 lladdr 0a:1b:02:33:44:05 REACHABLE`, ip), null);
   assert.equal(macFromNeighbors(`${ip} dev eth0 lladdr 0a:1b:02:33:44:05 STALE\n${ip} dev eth1 lladdr 0a:1b:02:33:44:06 STALE`, ip), null);
+});
+
+test('房主与成员可查看来源消息并下载明确链接的工作区产出', async (t) => {
+  const temp = mkdtempSync(join(tmpdir(), 'grouptalk-source-files-'));
+  const cwd = join(temp, 'project');
+  mkdirSync(cwd);
+  const report = join(cwd, '设计 文档.md');
+  const outside = join(temp, 'outside.md');
+  const dotfile = join(cwd, '.private.md');
+  const example = join(cwd, 'example.md');
+  const alias = join(cwd, 'shortcut.md');
+  for (const path of [report, outside, dotfile, example]) writeFileSync(path, '这是验收文件');
+  if (process.platform !== 'win32') symlinkSync(outside, alias);
+  const history = [{ items: [
+    { type: 'userMessage', content: [{ type: 'text', text: `[用户引用](<${example}>)` }] },
+    { type: 'agentMessage', text: `已完成 [设计文档](<${report}:12>)。\n[房间外](<${outside}>)\n[隐藏](<${dotfile}>)\n[软链接](<${alias}>)\n` +
+      '`[示例](<' + example + '>)`' },
+  ] }];
+  const f = await fixture({ cwd, sourceThreadId: 'test-source', agent: new FakeAgent({ history }) });
+  const web = await serve({ room: f.room, host: '127.0.0.1', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); rmSync(temp, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const get = (path, token) => fetch(base + path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  const owner = await (await get('/api/bootstrap', f.tokens.owner)).json();
+  const member = await (await get('/api/bootstrap', f.tokens.alice)).json();
+  assert.deepEqual(member.messages.map(({ role, history }) => ({ role, history })), [{ role: 'user', history: true }, { role: 'agent', history: true }]);
+  assert.deepEqual(member.sourceFiles, owner.sourceFiles);
+  const agentMessage = member.messages.find(({ role }) => role === 'agent');
+  const [{ index, label, name }] = member.sourceFiles[agentMessage.id];
+  assert.equal(Object.values(member.sourceFiles).flat().length, 1);
+  assert.equal(label, '设计文档');
+  assert.equal(name, '设计 文档.md');
+  const endpoint = `/api/source-files/${agentMessage.id}/${index}`;
+  assert.equal((await get(endpoint)).status, 401);
+  const download = await get(endpoint, f.tokens.alice);
+  assert.equal(download.status, 200);
+  assert.match(download.headers.get('content-disposition'), /^attachment;/);
+  assert.equal(await download.text(), '这是验收文件');
+  assert.equal((await get(`/api/source-files/${agentMessage.id}/1`, f.tokens.alice)).status, 404);
+  rmSync(report);
+  if (process.platform !== 'win32') symlinkSync(outside, report);
+  assert.equal((await get(endpoint, f.tokens.alice)).status, 404);
 });

@@ -6,7 +6,7 @@ const time = (stamp) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minu
 // randomUUID requires HTTPS on LAN hosts; getRandomValues also works on local HTTP.
 const newMessageId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 let token = sessionStorage.getItem('grouptalk-token');
-let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, showHistory = false, toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
+let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, conversationView, toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
 const params = new URLSearchParams(location.hash.slice(1));
 let joinKey = params.get('host') || params.get('invite') || '';
 $('#invite-input-wrap').hidden = Boolean(joinKey);
@@ -33,6 +33,7 @@ function renderMessage(message) {
   const task = state.tasks.find((task) => task.id === message.taskId);
   const quote = message.replyTo && state.messages.find((item) => item.id === message.replyTo);
   const isAgent = message.role === 'agent';
+  const files = state.sourceFiles?.[message.id] || [];
   const shared = message.sideChat ? `<div class="side-source">
     <button type="button" class="side-link" data-view-side="${esc(message.sideChat.id)}">Codex 侧聊 · ${esc(message.sideChat.title)}</button>
     <div class="quote">${esc(message.sideChat.question)}</div>
@@ -50,6 +51,8 @@ function renderMessage(message) {
       ${quote ? `<div class="quote">${esc(quote.authorName)}：${esc(quote.text.slice(0, 180))}</div>` : ''}
       ${shared}
       <div class="message-content">${rich(message.text)}</div>
+      ${files.length ? `<div class="source-files" aria-label="来源对话产出">${files.map((file) =>
+        `<button type="button" data-source-message="${esc(message.id)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}">下载 ${esc(file.label)}${file.label === file.name ? '' : ` · ${esc(file.name)}`}</button>`).join('')}</div>` : ''}
       ${task && isAgent ? `<div class="message-context"><span>◌</span> 已结合 ${task.contextCount || 0} 条新讨论${task.status === 'cancelled' ? ' · 本回合已停止' : ''}</div>` : ''}
       <div class="message-actions">
         <button data-reply="${esc(message.id)}">回复</button>
@@ -58,6 +61,18 @@ function renderMessage(message) {
       </div>
     </div>
   </article>`;
+}
+async function downloadSourceFile(button) {
+  const response = await fetch(`/api/source-files/${button.dataset.sourceMessage}/${button.dataset.sourceIndex}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error((await response.json()).error || '来源文件下载失败');
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = button.dataset.sourceName;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 function renderApprovals() {
   const { approvals, pendingApprovalCount } = state;
@@ -105,19 +120,26 @@ function render() {
   $('#agent-dot').classList.toggle('offline', state.runtime.state === 'disconnected');
   const pending = state.messages.filter((message) => message.role === 'user' && !message.history && message.seq > state.deliveredSeq).length;
   $('#context-status').textContent = pending ? `${pending} 条讨论待补充 · 下次参与时一并交给 Codex` : '当前讨论已同步给 Codex · 新消息会在下次参与时补充';
-  const normal = state.messages.filter((message) => !message.history);
-  const signature = JSON.stringify([state.messages.length, state.tasks.map((task) => [task.id, task.contextCount, task.status]), state.runtime.text, state.runtime.state, showHistory]);
+  const sourceCount = state.messages.filter((message) => message.history).length;
+  conversationView ??= sourceCount ? 'source' : 'room';
+  const showingSource = conversationView === 'source';
+  const messages = state.messages.filter((message) => Boolean(message.history) === showingSource);
+  $('#conversation-views').hidden = !sourceCount;
+  $('#source-count').textContent = sourceCount;
+  document.querySelectorAll('[data-conversation-view]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(button.dataset.conversationView === conversationView));
+  });
+  const signature = JSON.stringify(showingSource ? [conversationView, messages.length]
+    : [conversationView, messages.length, state.tasks.map((task) => [task.id, task.contextCount, task.status]), state.runtime.text, state.runtime.state]);
   if (signature !== renderSignature) {
     renderSignature = signature;
     const scroll = $('#conversation-scroll');
     const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     const hadMessages = Boolean($('#messages').children.length);
-    $('#welcome').hidden = normal.length > 0;
-    $('#history-toggle-wrap').hidden = !state.messages.some((message) => message.history);
-    $('#history-toggle').textContent = showHistory ? '收起来源对话' : `查看来源对话 · ${state.messages.filter((message) => message.history).length} 条`;
-    $('#messages').innerHTML = state.messages.filter((message) => !message.history || showHistory).map(renderMessage).join('');
+    $('#welcome').hidden = showingSource || messages.length > 0;
+    $('#messages').innerHTML = messages.map(renderMessage).join('');
     const active = state.tasks.find((task) => task.id === state.runtime.taskId);
-    $('#live-message').innerHTML = working ? `<article class="message agent-message"><span class="avatar codex-avatar" aria-hidden="true">✳</span><div class="message-body"><div class="message-meta"><span class="message-name">Codex</span><span class="message-tag">${active?.mode === 'execute' ? '正在实现' : '一起分析'}</span></div><div class="message-content">${state.runtime.text ? rich(state.runtime.text) : '<span class="thinking" aria-label="正在思考"><i></i><i></i><i></i></span>'}</div><div class="message-context">${esc(active?.progress.at(-1)?.text.split('\n')[0] || `正在结合 ${active?.contextCount || 0} 条新讨论`)}</div></div></article>` : '';
+    $('#live-message').innerHTML = !showingSource && working ? `<article class="message agent-message"><span class="avatar codex-avatar" aria-hidden="true">✳</span><div class="message-body"><div class="message-meta"><span class="message-name">Codex</span><span class="message-tag">${active?.mode === 'execute' ? '正在实现' : '一起分析'}</span></div><div class="message-content">${state.runtime.text ? rich(state.runtime.text) : '<span class="thinking" aria-label="正在思考"><i></i><i></i><i></i></span>'}</div><div class="message-context">${esc(active?.progress.at(-1)?.text.split('\n')[0] || `正在结合 ${active?.contextCount || 0} 条新讨论`)}</div></div></article>` : '';
     if (nearBottom || !hadMessages) requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
   }
   $('#settings-button').hidden = state.me.role !== 'host';
@@ -187,6 +209,8 @@ $('#message-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/messages', { text: $('#message-input').value, mode, replyTo, clientId });
     $('#message-input').value = ''; $('#message-input').style.height = 'auto'; replyTo = null; clientId = null;
+    conversationView = 'room';
+    render();
     $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
   } catch (error) { toast(error.message); } finally { busy = false; updateComposer(); $('#message-input').focus(); }
 });
@@ -194,6 +218,12 @@ document.addEventListener('click', async (event) => {
   const button = event.target.closest('button'); if (!button) return;
   try {
     if (button.hasAttribute('data-close')) button.closest('dialog').close();
+    if (button.dataset.conversationView) {
+      conversationView = button.dataset.conversationView;
+      render();
+      $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
+    }
+    if (button.dataset.sourceMessage) await downloadSourceFile(button);
     if (button.dataset.mode) { mode = button.dataset.mode; clientId = null; updateComposer(); $('#message-input').focus(); }
     if (button.dataset.reply) { replyTo = button.dataset.reply; updateComposer(); $('#message-input').focus(); }
     if (button.id === 'clear-reply') { replyTo = null; updateComposer(); }
@@ -210,7 +240,6 @@ document.addEventListener('click', async (event) => {
     if (button.dataset.viewSide) sideChat.open(button.dataset.viewSide);
   } catch (error) { toast(error.message); }
 });
-$('#history-toggle').onclick = () => { showHistory = !showHistory; render(); };
 $('#example-button').onclick = () => { $('#message-input').value = '我们先对齐一下：这个需求最想解决什么问题？'; updateComposer(); $('#message-input').focus(); };
 $('#add-note').onclick = () => { $('#note-text').value = ''; modal('#note-dialog'); };
 $('#show-notes').onclick = () => {

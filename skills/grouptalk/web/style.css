@@ -69,3 +69,10 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .approval-card pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .task-status.awaiting_approval { background: #cb9850; }
 .member-row .member-network { overflow-wrap: anywhere; line-height: 1.45; }
+.conversation-views { display: flex; gap: 8px; padding: 8px 24px; border-bottom: 1px solid var(--border); background: #fcfcfb; }
+.conversation-views button { border: 1px solid transparent; border-radius: 7px; background: transparent; padding: 6px 10px; color: #62705d; font-size: 12px; }
+.conversation-views button[aria-pressed="true"] { border-color: #dfd8f0; color: #5f4ea1; background: #f3effa; }
+.conversation-views span { margin-left: 4px; }
+.message.history-message { opacity: 1; }
+.source-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
+.source-files button { border: 1px solid #ded6f0; border-radius: 6px; padding: 5px 8px; color: #564698; background: #fff; font-size: 11px; text-align: left; overflow-wrap: anywhere; }
