@@ -1,0 +1,8 @@
+node_modules/
+.grouptalk/
+.env
+.env.*
+!.env.example
+artifacts/
+*.log
+.DS_Store
