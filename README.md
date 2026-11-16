@@ -16,9 +16,23 @@ $skill-installer 安装 https://github.com/cheatcodezky/group-talk/tree/main/ski
 $grouptalk 把当前对话开成局域网群聊。
 ```
 
-房主需要 Node.js 22.13 或更高版本，以及已登录的本机 Codex。Skill 自带 GroupTalk 服务端和网页。启动后把**局域网邀请链接**发给同一网络上的成员。他们用浏览器加入即可使用群聊和 Side Chat。房主入口用于管理房间。
+Skill 自带 GroupTalk 服务端和网页。启动后把**局域网邀请链接**发给同一网络上的成员。他们用浏览器加入即可使用群聊和 Side Chat。房主入口用于管理房间。
 
 保持主机和启动终端运行。按 Ctrl+C 可以停止。再次从同一个来源对话启动，会恢复原房间、邀请口令和协作分支。默认数据位置是 `~/.grouptalk/rooms/`，开房端口由系统分配。
+
+### 配置 Skill 和恢复启动
+
+房主使用已登录的本地 Codex。Skill 优先使用 `PATH` 中支持 SQLite 的 Node.js 22.13 或更高版本。如果缺少 Node.js、版本过旧或 SQLite 不可用，启动脚本会从 `nodejs.org` 下载并校验 Node.js 24 LTS，放到 `~/.grouptalk/runtime/`，然后继续开房。后续可以复用这份运行时。首次下载需要联网，安装只写入用户目录，项目无需执行 `npm install`。自动安装覆盖 macOS、Linux 和 Windows 的 x64 与 ARM64。macOS 和 Linux 使用 `curl`、`tar` 以及 `sha256sum` 或 `shasum`，Windows 使用 PowerShell。
+
+默认配置即可开房。有自定义环境时，可让 Codex 在启动命令里设置以下变量。
+
+| 变量 | 用途 |
+| --- | --- |
+| `GROUPTALK_CODEX_BIN` | 指定本机 Codex 可执行文件的绝对路径。适用于桌面内置版本或终端版本未被正常找到的情况。 |
+| `GROUPTALK_RUNTIME_DIR` | 指定 Skill 自动安装和复用 Node.js 的目录。 |
+| `GROUPTALK_STATE_DIR` | 指定房间数据的根目录，房间保存在其下的 `rooms/`。 |
+
+如果启动报错，把错误留在当前 Codex 对话里，请 `$grouptalk` 修复后重试。下载失败时检查到 `nodejs.org` 的网络，或让 Codex 使用已安装的兼容 Node.js；找不到 Codex 可执行文件时指定其路径，或通过[官方方式安装 Codex CLI](https://learn.chatgpt.com/docs/cli)。登录失效时先重新登录本机 Codex。若缺少来源对话 ID，在要分享的对话里用 `/status` 查找 ID，再让 Skill 用 `--thread <对话ID>` 启动。
 
 ## 启动
 
