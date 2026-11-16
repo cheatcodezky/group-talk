@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, FakeAgent, message, until } from './helpers.mjs';
-import { Store } from '../server/store.mjs';
-import { serve } from '../server/http.mjs';
+import { Store } from '../skills/grouptalk/server/store.mjs';
+import { serve } from '../skills/grouptalk/server/http.mjs';
 
 function create(room, author, anchorId) {
   return room.sideChats.create(author, { clientId: 'side-topic', title: '缓存边界', anchorId });

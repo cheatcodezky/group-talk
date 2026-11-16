@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { JevJudge } from '../server/jev.mjs';
+import { JevJudge } from '../skills/grouptalk/server/jev.mjs';
 
 test('Jev 使用官方 Noul 协议、只在服务端发送密钥并读取 Token 用量', async (t) => {
   let received;

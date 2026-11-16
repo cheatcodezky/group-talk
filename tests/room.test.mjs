@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fixture, FakeAgent, message, until, delay } from './helpers.mjs';
-import { Store } from '../server/store.mjs';
+import { Store } from '../skills/grouptalk/server/store.mjs';
 
 test('多人自由讨论不会调用 Agent，点名会包含所有人的未提交观点与引用', async (t) => {
   const f = await fixture(); t.after(f.close);
@@ -157,7 +157,7 @@ test('重启保留身份、聊天、记录和同一协作线程；运行中任�
   assert.equal(store.state.tasks[0].status, 'needs_review');
   assert.equal(store.state.queuePaused, true);
   assert.equal(store.state.members.find((m) => m.name === '小王').tokenHash.length, 64);
-  const { Room } = await import('../server/room.mjs');
+  const { Room } = await import('../skills/grouptalk/server/room.mjs');
   const agent = new FakeAgent();
   const room = new Room({ store, agent, judge: { ready: false }, cwd: dir }); t.after(() => room.close());
   await room.initialize();

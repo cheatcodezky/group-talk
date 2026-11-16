@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodexAgent, readLocalTranscript } from '../server/codex.mjs';
+import { CodexAgent, readLocalTranscript } from '../skills/grouptalk/server/codex.mjs';
 
 class FakeRpc extends EventEmitter {
   calls = [];

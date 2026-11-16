@@ -2,6 +2,24 @@
 
 局域网里的多人协作讨论室。多个真人先讨论同一个需求或方案，再邀请同一个 Codex 提供信息、比较取舍、澄清问题或执行任务。所有人共享讨论、上下文和结果。
 
+## 安装 Codex Skill
+
+在 Codex 里发送下面这条安装指令：
+
+```text
+$skill-installer 安装 https://github.com/cheatcodezky/group-talk/tree/main/skills/grouptalk
+```
+
+安装完成后，在想分享的**本地 Codex 对话**里发送：
+
+```text
+$grouptalk 把当前对话开成局域网群聊。
+```
+
+房主需要 Node.js 22.13 或更高版本，以及已登录的本机 Codex。Skill 自带 GroupTalk 服务端和网页。启动后把**局域网邀请链接**发给同一网络上的成员。他们用浏览器加入即可使用群聊和 Side Chat。房主入口用于管理房间。
+
+保持主机和启动终端运行。按 Ctrl+C 可以停止。再次从同一个来源对话启动，会恢复原房间、邀请口令和协作分支。默认数据位置是 `~/.grouptalk/rooms/`，开房端口由系统分配。
+
 ## 启动
 
 需要 Node.js 22.13 或更高版本，以及本机已登录的 Codex。项目没有第三方运行依赖，不需要执行 `npm install`。

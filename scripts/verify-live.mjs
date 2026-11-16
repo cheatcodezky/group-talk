@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { Store } from '../server/store.mjs';
-import { CodexAgent } from '../server/codex.mjs';
-import { JevJudge } from '../server/jev.mjs';
-import { Room } from '../server/room.mjs';
-import { serve } from '../server/http.mjs';
+import { Store } from '../skills/grouptalk/server/store.mjs';
+import { CodexAgent } from '../skills/grouptalk/server/codex.mjs';
+import { JevJudge } from '../skills/grouptalk/server/jev.mjs';
+import { Room } from '../skills/grouptalk/server/room.mjs';
+import { serve } from '../skills/grouptalk/server/http.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'grouptalk-live-'));
 const workspace = join(root, 'workspace'); mkdirSync(workspace);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serve, invitationLinks } from '../server/http.mjs';
+import { serve, invitationLinks } from '../skills/grouptalk/server/http.mjs';
 import { fixture, message, until } from './helpers.mjs';
 
 test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息与任务', async (t) => {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Store } from '../server/store.mjs';
-import { Room } from '../server/room.mjs';
+import { Store } from '../skills/grouptalk/server/store.mjs';
+import { Room } from '../skills/grouptalk/server/room.mjs';
 
 export const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function until(predicate, timeout = 2000) {
