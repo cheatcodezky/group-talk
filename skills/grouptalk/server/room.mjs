@@ -1,10 +1,12 @@
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { digest, secret } from './store.mjs';
 import { check, shortText } from './validation.mjs';
 import { SideChats } from './side-chats.mjs';
 
 export { HttpError } from './validation.mjs';
+
+const GUEST_NAMES = ['云雀', '松果', '海盐', '白桦', '山猫', '竹叶', '北星', '微风', '流萤', '银杏', '青石', '雪松'];
 
 export class Room extends EventEmitter {
   constructor({ store, agent, judge, cwd, sourceThreadId, sideAgentFactory, debounceMs = 2000, maxWaitMs = 10000, cooldownMs = 60000, threshold = 0.9 }) {
@@ -13,6 +15,7 @@ export class Room extends EventEmitter {
     this.state = store.state;
     this.sideChats = new SideChats(this, sideAgentFactory);
     this.connections = new Map();
+    this.memberNetworks = new Map();
     this.runtimeApprovals = new Map();
     this.runtime = { state: 'connecting', text: '', progress: [], taskId: null, error: '' };
     this.judgeVersion = 0;
@@ -67,9 +70,9 @@ export class Room extends EventEmitter {
   }
   join({ key, name }, { local = false } = {}) {
     check(typeof key === 'string' && (digest(key) === digest(this.state.invite) || digest(key) === digest(this.state.hostKey)), 401, '邀请链接不正确或已撤销');
-    name = shortText(name, 24, '昵称');
     const host = digest(key) === digest(this.state.hostKey);
     check(!host || local, 403, '房主入口仅可在开房电脑上使用');
+    name = (name === undefined || (typeof name === 'string' && !name.trim())) ? this.defaultNickname(host) : shortText(name, 24, '昵称');
     check(!this.state.members.some((m) => m.name === name), 409, '这个昵称已被使用，请换一个名字');
     const token = secret();
     const member = { id: randomUUID(), name, role: host ? 'host' : 'member', tokenHash: digest(token), joinedAt: Date.now() };
@@ -77,12 +80,37 @@ export class Room extends EventEmitter {
     this.commit();
     return { token, member: this.publicMember(member), roomId: this.state.id };
   }
+  defaultNickname(host) {
+    const taken = new Set(this.state.members.map(({ name }) => name));
+    const base = host ? '房主' : `${GUEST_NAMES[randomInt(GUEST_NAMES.length)]} ${randomInt(1000, 10_000)}`;
+    let name = base;
+    for (let suffix = 2; taken.has(name); suffix++) name = `${base} · ${suffix}`;
+    return name;
+  }
+  async observeNetwork(memberId, ip, lookupMac) {
+    if (!ip || this.closed) return;
+    const previous = this.memberNetworks.get(memberId);
+    const now = Date.now();
+    if (previous?.ip === ip && (previous.mac || now - previous.checkedAt < 30_000)) return;
+    const info = { ip, mac: null, checkedAt: now };
+    this.memberNetworks.set(memberId, info);
+    if (previous?.ip !== ip) this.emit('change');
+    const mac = await lookupMac(ip);
+    if (!mac || this.closed || this.memberNetworks.get(memberId) !== info) return;
+    info.mac = mac;
+    this.emit('change');
+  }
   publicMember(member) { return { id: member.id, name: member.name, role: member.role, online: (this.connections.get(member.id) || 0) > 0 }; }
   snapshot(member) {
     const executionRequests = this.state.tasks.filter((task) => task.status === 'awaiting_approval');
     return {
       id: this.state.id, title: this.state.title, topic: this.state.topic,
-      me: this.publicMember(member), members: this.state.members.map((m) => this.publicMember(m)),
+      me: this.publicMember(member), members: this.state.members.map((m) => {
+        const entry = this.publicMember(m);
+        const info = member.role === 'host' && this.memberNetworks.get(m.id);
+        if (info) entry.network = { ip: info.ip, mac: info.mac };
+        return entry;
+      }),
       messages: this.state.messages, tasks: this.state.tasks, notes: this.state.decisions,
       sideChats: this.sideChats.snapshot(),
       pendingApprovalCount: executionRequests.length + this.runtimeApprovals.size,

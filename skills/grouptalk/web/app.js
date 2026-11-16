@@ -10,7 +10,7 @@ let state, events, mode = 'chat', replyTo = null, busy = false, connected = fals
 const params = new URLSearchParams(location.hash.slice(1));
 let joinKey = params.get('host') || params.get('invite') || '';
 $('#invite-input-wrap').hidden = Boolean(joinKey);
-if (params.has('host')) $('#join-name').placeholder = '输入房主昵称';
+if (params.has('host')) $('#join-name').placeholder = '留空时默认叫房主';
 
 async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
   const response = await fetch(path, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(data !== undefined ? { 'content-type': 'application/json' } : {}) }, body: data === undefined ? undefined : JSON.stringify(data) });
@@ -87,7 +87,13 @@ function render() {
   $('#room-topic').textContent = state.topic;
   document.title = `${state.title} · GroupTalk`;
   $('#member-count').textContent = `${state.members.filter((member) => member.online).length} 在线`;
-  $('#members').innerHTML = state.members.map((member) => `<div class="member-row">${avatar(member.id, member.name)}<div><strong>${esc(member.name)}${member.id === state.me.id ? ' · 我' : ''}</strong><small>${member.role === 'host' ? '房主' : '协作者'}</small></div>${member.online ? '<span class="status-dot"></span>' : ''}</div>`).join('');
+  $('#members').innerHTML = state.members.map((member) => `<div class="member-row">
+    ${avatar(member.id, member.name)}
+    <div><strong>${esc(member.name)}${member.id === state.me.id ? ' · 我' : ''}</strong>
+      <small>${member.role === 'host' ? '房主' : '协作者'}</small>
+      ${member.network ? `<small class="member-network">IP ${esc(member.network.ip)}</small><small class="member-network">MAC ${esc(member.network.mac || '未识别')}</small>` : ''}
+    </div>${member.online ? '<span class="status-dot"></span>' : ''}
+  </div>`).join('');
   $('#identity-button').innerHTML = `${avatar(state.me.id, state.me.name)}<span>${esc(state.me.name)}</span><span>⌄</span>`;
   $('#connection-label').textContent = connected ? '已连接' : '正在重连';
   $('#connection-dot').classList.toggle('offline', !connected);

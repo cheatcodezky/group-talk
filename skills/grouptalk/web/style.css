@@ -68,3 +68,4 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .approval-card h3 { margin: 0; font-size: 14px; }
 .approval-card pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .task-status.awaiting_approval { background: #cb9850; }
+.member-row .member-network { overflow-wrap: anywhere; line-height: 1.45; }

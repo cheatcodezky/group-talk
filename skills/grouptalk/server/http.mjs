@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
 import { HttpError } from './room.mjs';
+import { clientAddress, lookupClientMac } from './neighbors.mjs';
 
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -38,7 +39,7 @@ export function invitationLinks({ port, host, invite, interfaces = networkInterf
   return links;
 }
 
-export async function serve({ room, host = '0.0.0.0', port = 4317 }) {
+export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac }) {
   const streams = new Set();
   let flushTimer;
   const flush = () => {
@@ -49,6 +50,9 @@ export async function serve({ room, host = '0.0.0.0', port = 4317 }) {
     }
   };
   const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, 35); };
+  const observe = (req, memberId) => {
+    void room.observeNetwork(memberId, clientAddress(req.socket.remoteAddress), lookupMac).catch(() => {});
+  };
   room.on('change', scheduleFlush);
   const server = http.createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
@@ -66,13 +70,21 @@ export async function serve({ room, host = '0.0.0.0', port = 4317 }) {
         const origin = req.headers.origin;
         if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) throw new HttpError(403, '请求来源不正确');
       }
-      if (url.pathname === '/api/join' && req.method === 'POST') return json(res, 201, room.join(await body(req), { local: isHostConnection(req, url) }));
+      if (url.pathname === '/api/join' && req.method === 'POST') {
+        const joined = room.join(await body(req), { local: isHostConnection(req, url) });
+        observe(req, joined.member.id);
+        return json(res, 201, joined);
+      }
       const header = req.headers.authorization || '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : url.pathname === '/api/events' ? url.searchParams.get('session') : '';
       const member = room.authenticate(token);
       if (member.role === 'host' && !isHostConnection(req, url)) throw new HttpError(403, '房主入口仅可在开房电脑上使用');
-      if (url.pathname === '/api/bootstrap' && req.method === 'GET') return json(res, 200, room.snapshot(member));
+      if (url.pathname === '/api/bootstrap' && req.method === 'GET') {
+        observe(req, member.id);
+        return json(res, 200, room.snapshot(member));
+      }
       if (url.pathname === '/api/events' && req.method === 'GET') {
+        observe(req, member.id);
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         const stream = { member, res }; streams.add(stream);
         const disconnect = room.connect(member);

@@ -4,6 +4,7 @@ import { serve, invitationLinks } from '../skills/grouptalk/server/http.mjs';
 import { fixture, message, until } from './helpers.mjs';
 import { networkInterfaces } from 'node:os';
 import { request } from 'node:http';
+import { clientAddress, macFromNeighbors } from '../skills/grouptalk/server/neighbors.mjs';
 
 test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息与任务', async (t) => {
   const f = await fixture();
@@ -108,4 +109,42 @@ test('邀请链接使用真实局域网地址，实体网卡优先且本机入�
   assert.equal(links.at(-1).localOnly, true);
   const localOnly = invitationLinks({ port: 4317, host: '127.0.0.1', invite: 'test', interfaces });
   assert.equal(localOnly.length, 1); assert.equal(localOnly[0].localOnly, true);
+});
+
+test('留空时分配房主与成员昵称，连接地址只给房主并以实际连接为准', async (t) => {
+  const f = await fixture();
+  const mac = '02:11:22:33:44:55';
+  const web = await serve({ room: f.room, host: '127.0.0.1', port: 0, lookupMac: async () => mac });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); });
+  f.store.state.members.find(({ id }) => id === f.owner.id).name = '测试主持人';
+  const base = `http://127.0.0.1:${web.port}`;
+  const join = async (key, name) => {
+    const response = await fetch(base + '/api/join', { method: 'POST', headers: { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.8' }, body: JSON.stringify({ key, name, ip: '203.0.113.8' }) });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const owner = await join(f.store.state.hostKey, '');
+  const secondOwner = await join(f.store.state.hostKey);
+  const member = await join(f.store.state.invite, '  ');
+  assert.equal(owner.member.name, '房主');
+  assert.equal(owner.member.role, 'host');
+  assert.equal(secondOwner.member.name, '房主 · 2');
+  assert.match(member.member.name, /^[\p{Script=Han}]+ \d{4}$/u);
+  assert.ok(!('network' in member.member));
+  const snapshot = async (token) => (await fetch(base + '/api/bootstrap', { headers: { authorization: `Bearer ${token}` } })).json();
+  assert.deepEqual((await snapshot(owner.token)).members.find(({ id }) => id === member.member.id).network, { ip: '127.0.0.1', mac });
+  assert.ok((await snapshot(member.token)).members.every((entry) => !('network' in entry)));
+  assert.ok(f.store.state.members.every((entry) => !('network' in entry)));
+});
+
+test('识别 IPv4 映射地址及各平台邻居记录，仅返回对应 IP 的单一 MAC', () => {
+  const ip = '192.168.31.42';
+  assert.equal(clientAddress(`::ffff:${ip}`), ip);
+  assert.equal(clientAddress('::1'), '::1');
+  assert.equal(clientAddress('example.com'), null);
+  assert.equal(macFromNeighbors(`? (${ip}) at a:1b:2:33:44:5 on en0 ifscope [ethernet]`, ip), '0a:1b:02:33:44:05');
+  assert.equal(macFromNeighbors(`  ${ip}   0A-1B-02-33-44-05   dynamic`, ip), '0a:1b:02:33:44:05');
+  assert.equal(macFromNeighbors(`${ip} dev eth0 lladdr 0a:1b:02:33:44:05 REACHABLE`, ip), '0a:1b:02:33:44:05');
+  assert.equal(macFromNeighbors(`${ip} dev eth0 INCOMPLETE\n192.168.31.43 dev eth0 lladdr 0a:1b:02:33:44:05 REACHABLE`, ip), null);
+  assert.equal(macFromNeighbors(`${ip} dev eth0 lladdr 0a:1b:02:33:44:05 STALE\n${ip} dev eth1 lladdr 0a:1b:02:33:44:06 STALE`, ip), null);
 });
