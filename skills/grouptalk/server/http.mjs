@@ -11,6 +11,11 @@ function json(res, status, data) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));
 }
+function isHostConnection(req, url) {
+  const loopback = (address) => address === '::1' || /^(::ffff:)?127\./.test(address || '');
+  return loopback(req.socket.remoteAddress) && loopback(req.socket.localAddress)
+    && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+}
 async function body(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new HttpError(415, '请使用 JSON 请求');
   let size = 0; const chunks = [];
@@ -61,10 +66,11 @@ export async function serve({ room, host = '0.0.0.0', port = 4317 }) {
         const origin = req.headers.origin;
         if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) throw new HttpError(403, '请求来源不正确');
       }
-      if (url.pathname === '/api/join' && req.method === 'POST') return json(res, 201, room.join(await body(req)));
+      if (url.pathname === '/api/join' && req.method === 'POST') return json(res, 201, room.join(await body(req), { local: isHostConnection(req, url) }));
       const header = req.headers.authorization || '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : url.pathname === '/api/events' ? url.searchParams.get('session') : '';
       const member = room.authenticate(token);
+      if (member.role === 'host' && !isHostConnection(req, url)) throw new HttpError(403, '房主入口仅可在开房电脑上使用');
       if (url.pathname === '/api/bootstrap' && req.method === 'GET') return json(res, 200, room.snapshot(member));
       if (url.pathname === '/api/events' && req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -92,6 +98,8 @@ export async function serve({ room, host = '0.0.0.0', port = 4317 }) {
           return json(res, 200, { ok: true });
         }
         if (url.pathname === '/api/settings') { room.configure(member, input); return json(res, 200, { ok: true }); }
+        const approvalRoute = url.pathname.match(/^\/api\/approvals\/([^/]+)$/);
+        if (approvalRoute) { room.decideApproval(member, approvalRoute[1], input.decision); return json(res, 200, { ok: true }); }
         if (url.pathname === '/api/notes') return json(res, 201, room.addNote(member, input));
         if (/^\/api\/notes\/[^/]+$/.test(url.pathname)) { room.updateNote(member, url.pathname.split('/').at(-1), input); return json(res, 200, { ok: true }); }
         if (/^\/api\/tasks\/[^/]+\/cancel$/.test(url.pathname)) { await room.cancel(member, url.pathname.split('/')[3]); return json(res, 200, { ok: true }); }

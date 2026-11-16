@@ -37,7 +37,7 @@ export async function fixture(options = {}) {
   const judge = options.judge || { ready: false, evaluate: async () => { throw new Error('不应调用'); } };
   const room = new Room({ store, agent, judge, cwd: '/tmp/grouptalk-test-workspace', debounceMs: 10, maxWaitMs: 30, cooldownMs: 30, ...options });
   await room.initialize();
-  const owner = room.join({ key: store.state.hostKey, name: '房主' });
+  const owner = room.join({ key: store.state.hostKey, name: '房主' }, { local: true });
   const alice = room.join({ key: store.state.invite, name: '小王' });
   const bob = room.join({ key: store.state.invite, name: '小李' });
   return { store, room, agent, owner: room.authenticate(owner.token), alice: room.authenticate(alice.token), bob: room.authenticate(bob.token), tokens: { owner: owner.token, alice: alice.token, bob: bob.token }, close: () => { room.close(); store.close(); } };

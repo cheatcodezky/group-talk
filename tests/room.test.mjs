@@ -59,8 +59,14 @@ test('执行权限在服务端校验，普通讨论和 Jev 不获得执行权限
   assert.throws(() => f.room.configure(f.bob, { allowExecution: true }), /房主/);
   f.room.configure(f.owner, { allowExecution: true });
   const task = f.room.post(f.alice, message('创建一个小函数并验证。', 'execute')).task;
+  assert.equal(task.status, 'awaiting_approval');
+  assert.equal(f.agent.calls.length, 0);
+  assert.throws(() => f.room.decideApproval(f.alice, task.id, 'accept'), /房主/);
+  assert.throws(() => f.room.decideApproval(f.owner, task.id, 'acceptForSession'), /本次/);
+  f.room.decideApproval(f.owner, task.id, 'accept');
   await until(() => task.status === 'completed');
   assert.equal(f.agent.calls[0].mode, 'execute');
+  assert.throws(() => f.room.decideApproval(f.owner, task.id, 'accept'), /已结束/);
 });
 
 test('取消排队任务和正在运行的任务，其他成员不能停止别人的任务', async (t) => {

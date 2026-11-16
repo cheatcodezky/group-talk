@@ -51,6 +51,7 @@ try {
   await room.initialize();
   report.model = agent.model;
   report.binary = agent.rpc.child.spawnfile;
+  report.shellRestricted = agent.shellRestricted;
   web = await serve({ room, host: '127.0.0.1', port: 0 });
   const base = `http://127.0.0.1:${web.port}`;
   const post = async (path, data, token) => {
@@ -89,7 +90,8 @@ try {
     title: '隔离策略', clientId: randomUUID(), anchorId: pending.message.id,
   }, alice.token);
   const side = store.state.sideChats.find((entry) => entry.id === sideId);
-  const execution = await send(owner, '请实现一个最小可验证功能：创建 positive-sum.mjs，导出 positiveSum(values)，只累加数组中的正数；创建 positive-sum.test.mjs，使用 node:test 验证 [1,-2,3,0] 得到4以及空数组得到0。运行 node --test positive-sum.test.mjs。只修改这两个文件，不要安装依赖。最后简要报告验证结果。', 'execute');
+  const verifyCommand = agent.shellRestricted ? '验收脚本会在房间外运行测试，请用文件编辑工具创建文件。' : '运行 node --test positive-sum.test.mjs。';
+  const execution = await send(owner, `请实现一个最小可验证功能：创建 positive-sum.mjs，导出 positiveSum(values)，只累加数组中的正数；创建 positive-sum.test.mjs，使用 node:test 验证 [1,-2,3,0] 得到4以及空数组得到0。${verifyCommand}只修改这两个文件，不要安装依赖。最后简要报告结果。`, 'execute');
   const { id: sideQuestionId } = await post(`/api/side-chats/${sideId}/messages`, {
     text: '请简短列出来源对话的项目代号、选定消息的隔离校验代号、以及小王建议的缓存秒数。只回答这些信息。',
     clientId: randomUUID(),
@@ -110,8 +112,13 @@ try {
   const output = execFileSync(process.execPath, ['--test', 'positive-sum.test.mjs'], { cwd: workspace, encoding: 'utf8' });
   assert.match(readFileSync(join(workspace, 'positive-sum.mjs'), 'utf8'), /positiveSum/);
   assert.match(output, /pass 2/);
-  assert.ok(executedTask.progress.some((event) => event.type === 'commandResult'));
-  check('真实 Codex 在指定工作区写入代码、运行测试，外部再次执行验证通过');
+  if (agent.shellRestricted) {
+    assert.ok(executedTask.progress.every((event) => event.type !== 'commandResult'));
+    check('已有命令规则时，群聊使用文件编辑工具，验收脚本在房间外运行测试');
+  } else {
+    assert.ok(executedTask.progress.some((event) => event.type === 'commandResult'));
+    check('真实 Codex 在指定工作区写入代码、运行测试，外部再次执行验证通过');
+  }
   const snapshotResponse = await fetch(`${base}/api/bootstrap`, { headers: { authorization: `Bearer ${alice.token}` } });
   const snapshot = await snapshotResponse.json();
   assert.equal(snapshot.tasks.filter((task) => task.status === 'completed').length, 4);

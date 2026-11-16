@@ -1,16 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAgent, readLocalTranscript } from '../skills/grouptalk/server/codex.mjs';
 
 class FakeRpc extends EventEmitter {
   calls = [];
+  config = { layers: [], config: {} };
   async initialize() {}
   async request(method, params) {
     this.calls.push({ method, params });
+    if (method === 'config/read') return this.config;
     if (method === 'model/list') return { data: [{ id: 'available-model', model: 'available-model', isDefault: true }] };
     if (method.startsWith('thread/')) return { thread: { id: 'shared', turns: [] }, model: params.model };
     if (method === 'turn/start') return { turn: { id: 'turn-1' } };
@@ -22,11 +24,29 @@ class FakeRpc extends EventEmitter {
   notify(method, params = {}) { this.emit('notification', { method, params: { threadId: 'shared', ...params } }); }
 }
 
+test('共享线程关闭本机连接器和钩子，有历史命令规则时停用 shell', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'grouptalk-saved-rules-'));
+  t.after(() => rmSync(folder, { recursive: true, force: true }));
+  mkdirSync(join(folder, 'rules'));
+  writeFileSync(join(folder, 'rules', 'default.rules'), 'prefix_rule(pattern=["demo"], decision="allow")');
+  const rpc = new FakeRpc();
+  rpc.config = { layers: [{ name: { type: 'user', file: join(folder, 'config.toml') } }], config: { mcp_servers: { demo: { enabled: true } } } };
+  const agent = new CodexAgent({ cwd: folder, rpcFactory: () => rpc });
+  await agent.initialize({ sourceThreadId: 'source' });
+  assert.equal(agent.shellRestricted, true);
+  const { config, sandbox, approvalPolicy } = rpc.calls.find(({ method }) => method === 'thread/fork').params;
+  assert.deepEqual(config, { 'features.apps': false, 'features.plugins': false, 'features.hooks': false, 'mcp_servers.demo.enabled': false, 'features.shell_tool': false });
+  assert.equal(sandbox, 'read-only');
+  assert.equal(approvalPolicy, 'on-request');
+  agent.close();
+});
+
 test('Codex 选择可用默认模型、按模式设置沙箱、合并流式回复并记录执行证据', async () => {
   const rpc = new FakeRpc();
   const agent = new CodexAgent({ cwd: '/tmp/workspace', rpcFactory: () => rpc });
   await agent.initialize({});
   assert.equal(rpc.calls.find((c) => c.method === 'thread/start').params.model, 'available-model');
+  assert.equal(rpc.calls.find((c) => c.method === 'thread/start').params.approvalPolicy, 'on-request');
   let accepted = 0; let partial = ''; const progress = [];
   const result = agent.run({ prompt: 'test', mode: 'ask', id: 'message-1', onAccepted: () => accepted++, onDelta: (text) => partial = text, onProgress: (event) => progress.push(event) });
   await Promise.resolve();
@@ -48,6 +68,44 @@ test('Codex 选择可用默认模型、按模式设置沙箱、合并流式回�
   const policy = rpc.calls.filter((c) => c.method === 'turn/start')[1].params.sandboxPolicy;
   assert.equal(policy.type, 'workspaceWrite'); assert.equal(policy.networkAccess, false);
   assert.deepEqual(policy.writableRoots, ['/tmp/workspace']);
+  assert.ok(rpc.calls.filter(({ method }) => method === 'turn/start').every(({ params }) => params.approvalPolicy === 'on-request' && params.approvalsReviewer === 'user'));
+  agent.close();
+});
+
+test('只处理当前执行回合的单次审批，拒绝持久授权，并在回合结束时撤下审批', async () => {
+  const rpc = new FakeRpc();
+  const agent = new CodexAgent({ cwd: '/tmp/workspace', rpcFactory: () => rpc });
+  await agent.initialize({});
+  const requested = [];
+  const progress = [];
+  let removed = 0;
+  const run = agent.run({ prompt: 'execute', mode: 'execute', id: 'test-request', onAccepted() {}, onDelta() {},
+    onProgress: (event) => progress.push(event),
+    onApproval: (preview, reply) => { requested.push({ preview, reply }); return () => { removed++; }; },
+  });
+  await Promise.resolve();
+  const request = (id, changes = {}) => agent.handleRequest({ id, method: 'item/commandExecution/requestApproval', params: { threadId: 'shared', turnId: 'turn-1', itemId: 'command', ...changes } });
+  rpc.notify('item/started', { turnId: 'turn-1', item: { type: 'commandExecution', id: 'command', command: 'private command', cwd: '/tmp/workspace' } });
+  assert.doesNotMatch(JSON.stringify(progress), /private command/);
+  request(1, { turnId: 'old' });
+  assert.deepEqual(rpc.lastResponse, { id: 1, result: { decision: 'decline' } });
+  request(2, { availableDecisions: ['acceptForSession', 'decline'] });
+  assert.deepEqual(rpc.lastResponse, { id: 2, result: { decision: 'decline' } });
+  request(3, { availableDecisions: ['accept', 'decline'] });
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].preview.detail, 'private command');
+  assert.equal(rpc.lastResponse.id, 2);
+  requested[0].reply('accept');
+  assert.deepEqual(rpc.lastResponse, { id: 3, result: { decision: 'accept' } });
+  request(4);
+  rpc.notify('serverRequest/resolved', { requestId: 4 });
+  assert.equal(removed, 1);
+  request(5);
+  agent.handleRequest({ id: 6, method: 'item/permissions/requestApproval' });
+  assert.deepEqual(rpc.lastResponse, { id: 6, result: { permissions: {}, scope: 'turn' } });
+  rpc.notify('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  await run;
+  assert.equal(removed, 2);
   agent.close();
 });
 

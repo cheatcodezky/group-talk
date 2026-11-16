@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { serve, invitationLinks } from '../skills/grouptalk/server/http.mjs';
 import { fixture, message, until } from './helpers.mjs';
+import { networkInterfaces } from 'node:os';
+import { request } from 'node:http';
 
 test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息与任务', async (t) => {
   const f = await fixture();
@@ -53,6 +55,46 @@ test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息
   assert.equal((await request('/api/messages', f.tokens.bob, message('非法执行', 'execute'))).response.status, 403);
   const badOrigin = await fetch(base + '/api/messages', { method: 'POST', headers: { authorization: `Bearer ${f.tokens.bob}`, 'content-type': 'application/json', origin: 'http://foreign.example' }, body: JSON.stringify(message('跨站')) });
   assert.equal(badOrigin.status, 403);
+});
+
+test('成员和局域网来访者无法使用房主审批，房主本机可以单次拒绝或批准', async (t) => {
+  const f = await fixture();
+  const web = await serve({ room: f.room, host: '0.0.0.0', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const post = (path, data, token, options = {}) => new Promise((resolve, reject) => {
+    const body = JSON.stringify(data);
+    const req = request((options.base || base) + path, { method: 'POST', headers: {
+      'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...(token ? { authorization: `Bearer ${token}` } : {}), ...options.headers,
+    } }, (res) => { res.resume(); resolve({ status: res.statusCode }); });
+    req.on('error', reject);
+    req.end(body);
+  });
+  f.room.configure(f.owner, { allowExecution: true });
+  const task = f.room.post(f.alice, message('创建一个报告文件', 'execute')).task;
+  const endpoint = `/api/approvals/${task.id}`;
+  assert.equal((await post(endpoint, { decision: 'accept' }, f.tokens.alice)).status, 403);
+  assert.equal((await post(endpoint, { decision: 'accept' }, f.tokens.owner, { headers: { host: `lan.example:${web.port}`, 'x-forwarded-for': '127.0.0.1' } })).status, 403);
+  assert.equal(f.agent.calls.length, 0);
+  const lan = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal);
+  if (lan) {
+    const options = { base: `http://${lan.address}:${web.port}`, headers: { host: `127.0.0.1:${web.port}`, 'x-forwarded-for': '127.0.0.1' } };
+    assert.equal((await post('/api/join', { key: f.store.state.hostKey, name: '远程房主' }, null, options)).status, 403);
+    assert.equal((await post(endpoint, { decision: 'accept' }, f.tokens.owner, options)).status, 403);
+    assert.equal((await post('/api/join', { key: f.store.state.invite, name: '局域网成员' }, null, options)).status, 201);
+  }
+  let decision;
+  f.room.requestApproval(task, { kind: '命令执行', detail: 'private approval details' }, (value) => { decision = value; });
+  const owner = f.room.snapshot(f.owner);
+  const member = f.room.snapshot(f.alice);
+  assert.equal(member.pendingApprovalCount, 2);
+  assert.doesNotMatch(JSON.stringify(member), /private approval details/);
+  const pending = owner.approvals.find((entry) => entry.kind === '命令执行');
+  assert.equal((await post(`/api/approvals/${pending.id}`, { decision: 'decline' }, f.tokens.owner)).status, 200);
+  assert.equal(decision, 'decline');
+  assert.equal((await post(`/api/approvals/${pending.id}`, { decision: 'accept' }, f.tokens.owner)).status, 409);
+  assert.equal((await post(endpoint, { decision: 'accept' }, f.tokens.owner)).status, 200);
+  await until(() => task.status === 'completed');
 });
 
 test('邀请链接使用真实局域网地址，实体网卡优先且本机入口明确区分', () => {

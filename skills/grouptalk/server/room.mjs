@@ -13,6 +13,7 @@ export class Room extends EventEmitter {
     this.state = store.state;
     this.sideChats = new SideChats(this, sideAgentFactory);
     this.connections = new Map();
+    this.runtimeApprovals = new Map();
     this.runtime = { state: 'connecting', text: '', progress: [], taskId: null, error: '' };
     this.judgeVersion = 0;
     this.closed = false;
@@ -64,10 +65,11 @@ export class Room extends EventEmitter {
     check(member, 401, '身份已失效，请通过邀请链接重新加入');
     return member;
   }
-  join({ key, name }) {
+  join({ key, name }, { local = false } = {}) {
     check(typeof key === 'string' && (digest(key) === digest(this.state.invite) || digest(key) === digest(this.state.hostKey)), 401, '邀请链接不正确或已撤销');
     name = shortText(name, 24, '昵称');
     const host = digest(key) === digest(this.state.hostKey);
+    check(!host || local, 403, '房主入口仅可在开房电脑上使用');
     check(!this.state.members.some((m) => m.name === name), 409, '这个昵称已被使用，请换一个名字');
     const token = secret();
     const member = { id: randomUUID(), name, role: host ? 'host' : 'member', tokenHash: digest(token), joinedAt: Date.now() };
@@ -77,14 +79,21 @@ export class Room extends EventEmitter {
   }
   publicMember(member) { return { id: member.id, name: member.name, role: member.role, online: (this.connections.get(member.id) || 0) > 0 }; }
   snapshot(member) {
+    const executionRequests = this.state.tasks.filter((task) => task.status === 'awaiting_approval');
     return {
       id: this.state.id, title: this.state.title, topic: this.state.topic,
       me: this.publicMember(member), members: this.state.members.map((m) => this.publicMember(m)),
       messages: this.state.messages, tasks: this.state.tasks, notes: this.state.decisions,
       sideChats: this.sideChats.snapshot(),
+      pendingApprovalCount: executionRequests.length + this.runtimeApprovals.size,
+      approvals: member.role === 'host' ? [
+        ...executionRequests.map((task) => ({ id: task.id, kind: '成员执行请求', detail: task.request, authorName: task.authorName })),
+        ...Array.from(this.runtimeApprovals.values(), ({ approval }) => approval),
+      ] : [],
       settings: this.state.settings, judge: { ...this.state.judge, ready: this.judge.ready },
       deliveredSeq: this.state.deliveredSeq, queuePaused: this.state.queuePaused,
       runtime: this.runtime, usage: this.state.usage, workspace: this.cwd, model: this.model,
+      shellRestricted: Boolean(this.agent.shellRestricted),
       threadId: this.state.threadId, sourceThreadId: this.state.sourceThreadId,
     };
   }
@@ -125,7 +134,7 @@ export class Room extends EventEmitter {
   }
   enqueue({ trigger, author, message, mode = 'ask', request }) {
     const task = {
-      id: randomUUID(), status: 'queued', trigger, mode, authorId: author?.id || 'jev', authorName: author?.name || 'Jev 自动邀请',
+      id: randomUUID(), status: mode === 'execute' && author?.role !== 'host' ? 'awaiting_approval' : 'queued', trigger, mode, authorId: author?.id || 'jev', authorName: author?.name || 'Jev 自动邀请',
       messageId: message?.id || null, request, createdAt: Date.now(), progress: [],
     };
     this.state.tasks.push(task);
@@ -153,6 +162,41 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
     this.state.usage.outputTokens += usage.outputTokens || 0;
     this.state.usage.cachedInputTokens += usage.cachedInputTokens || 0;
   }
+  requestApproval(task, details, reply) {
+    const approval = { ...details, id: randomUUID(), authorName: task.authorName };
+    const remove = () => {
+      clearTimeout(timer);
+      if (this.runtimeApprovals.delete(approval.id)) this.emit('change');
+    };
+    const decide = (decision, text) => {
+      remove();
+      reply(decision);
+      task.progress.push({ type: 'approval', text, at: Date.now() });
+      this.commit();
+    };
+    const timer = setTimeout(() => decide('decline', '审批超时，此操作已拒绝。'), 5 * 60_000);
+    this.runtimeApprovals.set(approval.id, { approval, decide, remove });
+    this.emit('change');
+    return remove;
+  }
+  decideApproval(member, id, decision) {
+    check(member.role === 'host', 403, '仅房主可以审批');
+    check(['accept', 'decline'].includes(decision), 400, '请选择允许本次或拒绝');
+    const accepted = decision === 'accept';
+    const text = accepted ? '房主已允许本次操作。' : '房主已拒绝本次操作。';
+    const runtime = this.runtimeApprovals.get(id);
+    if (runtime) { runtime.decide(decision, text); return; }
+
+    const task = this.state.tasks.find((entry) => entry.id === id && entry.status === 'awaiting_approval');
+    check(task, 409, '此审批已结束，请刷新状态');
+    check(!accepted || this.state.settings.allowExecution, 409, '房主已关闭成员执行请求');
+    task.status = accepted ? 'queued' : 'cancelled';
+    if (accepted) task.approvedBy = member.id;
+    else task.finishedAt = Date.now();
+    task.progress.push({ type: 'approval', text, at: Date.now() });
+    this.commit();
+    if (accepted) void this.pump();
+  }
   async pump() {
     if (this.closed || this.pumping || this.state.queuePaused || this.runtime.state === 'disconnected') return;
     this.pumping = true;
@@ -163,6 +207,9 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
         const author = this.state.members.find((member) => member.id === task.authorId);
         if (task.mode === 'execute' && (!author || !this.canExecute(author))) {
           task.status = 'failed'; task.error = '执行权限已撤销，此任务没有运行。'; this.commit(); continue;
+        }
+        if (task.mode === 'execute' && author.role !== 'host' && !task.approvedBy) {
+          task.status = 'awaiting_approval'; this.commit(); continue;
         }
         const cutoff = this.state.seq;
         const messages = this.state.messages.filter((m) => m.role === 'user' && !m.history && m.seq > this.state.deliveredSeq && m.seq <= cutoff);
@@ -185,6 +232,7 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
             },
             onDelta: (text) => { this.runtime.text = text; this.emit('change'); },
             onProgress: (event) => { task.progress.push({ ...event, at: Date.now() }); this.runtime.progress = task.progress; this.commit(); },
+            onApproval: (details, reply) => this.requestApproval(task, details, reply),
           });
           task.status = result.status; task.result = result.text; task.finishedAt = Date.now();
           if (result.text) this.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex', text: result.text, taskId: task.id, trigger: task.trigger });
@@ -205,7 +253,7 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
     const task = this.state.tasks.find((t) => t.id === taskId);
     check(task, 404, '任务不存在');
     check(member.role === 'host' || task.authorId === member.id, 403, '只能停止自己发起的任务');
-    if (task.status === 'queued') { task.status = 'cancelled'; this.commit(); }
+    if (['queued', 'awaiting_approval'].includes(task.status)) { task.status = 'cancelled'; this.commit(); }
     else if (task.status === 'running') { await this.agent.interrupt(); }
     else check(false, 409, '任务已结束或正在提交，请稍后刷新状态');
   }
@@ -227,7 +275,14 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
       this.state.judge.status = input.jevEnabled ? 'waiting' : 'off';
       for (const task of this.state.tasks) if (task.trigger === 'auto' && task.status === 'queued') task.status = 'cancelled';
     }
-    if (input.allowExecution !== undefined) { check(typeof input.allowExecution === 'boolean', 400, '执行权限值不正确'); this.state.settings.allowExecution = input.allowExecution; }
+    if (input.allowExecution !== undefined) {
+      this.state.settings.allowExecution = input.allowExecution;
+      if (!input.allowExecution) {
+        for (const task of this.state.tasks.filter((entry) => entry.status === 'awaiting_approval')) {
+          task.status = 'failed'; task.error = '执行权限已撤销，此任务没有运行。'; task.finishedAt = Date.now();
+        }
+      }
+    }
     if (input.title !== undefined) this.state.title = shortText(input.title, 60, '房间名称');
     if (input.topic !== undefined) this.state.topic = shortText(input.topic, 500, '讨论目标');
     this.commit();
@@ -306,6 +361,7 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
   }
   close() {
     this.closed = true;
+    for (const entry of this.runtimeApprovals.values()) entry.remove();
     this.invalidateJudge();
     this.sideChats.close();
     this.agent.close();
