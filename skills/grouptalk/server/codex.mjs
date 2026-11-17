@@ -236,5 +236,5 @@ export class CodexAgent {
   async interrupt() {
     if (this.current?.turnId) await this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId: this.current.turnId });
   }
-  close() { this.rpc?.close(); }
+  close() { return this.rpc?.close(); }
 }

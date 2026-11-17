@@ -69,8 +69,7 @@ let stopping = false;
 async function stop(code = 0) {
   if (stopping) return;
   stopping = true;
-  room?.close();
-  if (web) await web.close();
+  await Promise.all([room?.close(), web?.close({ notifyStop: true })]);
   store?.close();
   if (ownsLock) {
     try { unlinkSync(lockPath); } catch {}
@@ -95,7 +94,7 @@ try {
   room = new Room({ store, agent, judge: new JevJudge(), cwd, sourceThreadId });
   console.log('正在连接本机 Codex，准备共享协作会话…');
   await room.initialize();
-  web = await serve({ room, host: values.host, port });
+  web = await serve({ room, host: values.host, port, onStop: () => stop() });
   const base = `http://127.0.0.1:${web.port}`;
   console.log(`\nGroupTalk 已启动\n工作区: ${cwd}\n来源线程: ${store.state.sourceThreadId || '新会话'}\n协作线程: ${store.state.threadId}\n`);
   console.log(`房主入口: ${base}/#host=${store.state.hostKey}`);

@@ -202,6 +202,6 @@ ${JSON.stringify(context)}`;
   }
 
   close() {
-    this.active?.agent?.close();
+    return this.active?.agent?.close();
   }
 }

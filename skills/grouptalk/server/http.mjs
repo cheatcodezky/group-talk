@@ -41,10 +41,11 @@ export function invitationLinks({ port, host, invite, interfaces = networkInterf
   return links;
 }
 
-export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac }) {
+export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac, onStop }) {
   const source = await indexSourceFiles(room);
-  const snapshot = (member) => ({ ...room.snapshot(member), sourceFiles: source.files });
+  const snapshot = (member) => ({ ...room.snapshot(member), sourceFiles: source.files, canStop: Boolean(onStop) && member.role === 'host' });
   const streams = new Set();
+  let stopRequested = false;
   let flushTimer;
   const flush = () => {
     flushTimer = null;
@@ -64,6 +65,7 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
     res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (stopRequested && !(url.pathname === '/api/stop' && req.method === 'POST')) throw new HttpError(503, '房间正在停止');
       if (req.method === 'GET' && FILES.has(url.pathname)) {
         const [file, type] = FILES.get(url.pathname);
         res.writeHead(200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-cache' });
@@ -75,7 +77,9 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
         if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) throw new HttpError(403, '请求来源不正确');
       }
       if (url.pathname === '/api/join' && req.method === 'POST') {
-        const joined = room.join(await body(req), { local: isHostConnection(req, url) });
+        const input = await body(req);
+        if (stopRequested) throw new HttpError(503, '房间正在停止');
+        const joined = room.join(input, { local: isHostConnection(req, url) });
         observe(req, joined.member.id);
         return json(res, 201, joined);
       }
@@ -83,6 +87,23 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       const token = header.startsWith('Bearer ') ? header.slice(7) : url.pathname === '/api/events' ? url.searchParams.get('session') : '';
       const member = room.authenticate(token);
       if (member.role === 'host' && !isHostConnection(req, url)) throw new HttpError(403, '房主入口仅可在开房电脑上使用');
+      if (url.pathname === '/api/stop' && req.method === 'POST') {
+        if (member.role !== 'host') throw new HttpError(403, '仅本机房主可以停止服务');
+        if (!onStop) throw new HttpError(503, '当前服务不支持从网页停止');
+        await body(req);
+        if (!stopRequested) {
+          stopRequested = true;
+          const beginStop = () => {
+            res.off('finish', beginStop);
+            res.off('close', beginStop);
+            void onStop();
+          };
+          if (res.destroyed) { beginStop(); return; }
+          res.once('finish', beginStop);
+          res.once('close', beginStop);
+        }
+        return json(res, 200, { ok: true });
+      }
       if (url.pathname === '/api/bootstrap' && req.method === 'GET') {
         observe(req, member.id);
         return json(res, 200, snapshot(member));
@@ -113,6 +134,7 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       }
       if (req.method === 'POST') {
         const input = await body(req);
+        if (stopRequested) throw new HttpError(503, '房间正在停止');
         if (url.pathname === '/api/messages') return json(res, 201, room.post(member, input));
         if (url.pathname === '/api/side-chats') return json(res, 201, { id: room.sideChats.create(member, input).id });
         const sideRoute = url.pathname.match(/^\/api\/side-chats\/([^/]+)\/(messages|share|cancel)$/);
@@ -142,10 +164,13 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
   return {
     server, port: server.address().port,
-    async close() {
+    async close({ notifyStop = false } = {}) {
+      stopRequested = true;
       room.off('change', scheduleFlush); clearTimeout(flushTimer);
-      for (const stream of streams) stream.res.end();
-      await new Promise((resolve) => server.close(resolve));
+      for (const { res } of streams) res.end(notifyStop ? 'event: shutdown\ndata: {}\n\n' : undefined);
+      const closed = new Promise((resolve) => server.close(resolve));
+      const drain = setTimeout(() => server.closeAllConnections(), 1500);
+      try { await closed; } finally { clearTimeout(drain); }
     },
   };
 }

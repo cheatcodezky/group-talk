@@ -6,13 +6,14 @@ const time = (stamp) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minu
 // randomUUID requires HTTPS on LAN hosts; getRandomValues also works on local HTTP.
 const newMessageId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 let token = sessionStorage.getItem('grouptalk-token');
-let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, conversationView, toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
+let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, serviceStopped = false, conversationView, toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
 const params = new URLSearchParams(location.hash.slice(1));
 let joinKey = params.get('host') || params.get('invite') || '';
 $('#invite-input-wrap').hidden = Boolean(joinKey);
 if (params.has('host')) $('#join-name').placeholder = '留空时默认叫房主';
 
 async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
+  if (serviceStopped) throw new Error('GroupTalk 服务已停止');
   const response = await fetch(path, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(data !== undefined ? { 'content-type': 'application/json' } : {}) }, body: data === undefined ? undefined : JSON.stringify(data) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || `请求失败（${response.status}）`);
@@ -110,14 +111,15 @@ function render() {
     </div>${member.online ? '<span class="status-dot"></span>' : ''}
   </div>`).join('');
   $('#identity-button').innerHTML = `${avatar(state.me.id, state.me.name)}<span>${esc(state.me.name)}</span><span>⌄</span>`;
-  $('#connection-label').textContent = connected ? '已连接' : '正在重连';
+  $('#connection-label').textContent = serviceStopped ? '服务已停止' : connected ? '已连接' : '正在重连';
   $('#connection-dot').classList.toggle('offline', !connected);
   $('#connection-banner').hidden = connected && !state.runtime.error;
-  $('#connection-banner').textContent = !connected ? '连接已中断，正在自动重连。尚未发送的内容会保留。' : state.runtime.error;
+  $('#connection-banner').textContent = serviceStopped ? 'GroupTalk 服务已停止。房主重新开房后，请打开新的邀请链接或刷新此页。'
+    : !connected ? '连接已中断，正在自动重连。尚未发送的内容会保留。' : state.runtime.error;
   renderApprovals();
-  const working = state.runtime.state === 'working';
-  $('#agent-presence').textContent = working ? '正在与大家协作' : state.runtime.state === 'disconnected' ? '连接已断开' : state.settings.jevEnabled ? '正在倾听讨论' : '等待 @Codex';
-  $('#agent-dot').classList.toggle('offline', state.runtime.state === 'disconnected');
+  const working = !serviceStopped && state.runtime.state === 'working';
+  $('#agent-presence').textContent = working ? '正在与大家协作' : serviceStopped || state.runtime.state === 'disconnected' ? '连接已断开' : state.settings.jevEnabled ? '正在倾听讨论' : '等待 @Codex';
+  $('#agent-dot').classList.toggle('offline', serviceStopped || state.runtime.state === 'disconnected');
   const pending = state.messages.filter((message) => message.role === 'user' && !message.history && message.seq > state.deliveredSeq).length;
   $('#context-status').textContent = pending ? `${pending} 条讨论待补充 · 下次参与时一并交给 Codex` : '当前讨论已同步给 Codex · 新消息会在下次参与时补充';
   const sourceCount = state.messages.filter((message) => message.history).length;
@@ -130,7 +132,7 @@ function render() {
     button.setAttribute('aria-pressed', String(button.dataset.conversationView === conversationView));
   });
   const signature = JSON.stringify(showingSource ? [conversationView, messages.length]
-    : [conversationView, messages.length, state.tasks.map((task) => [task.id, task.contextCount, task.status]), state.runtime.text, state.runtime.state]);
+    : [conversationView, messages.length, state.tasks.map((task) => [task.id, task.contextCount, task.status]), state.runtime.text, state.runtime.state, serviceStopped]);
   if (signature !== renderSignature) {
     renderSignature = signature;
     const scroll = $('#conversation-scroll');
@@ -143,6 +145,8 @@ function render() {
     if (nearBottom || !hadMessages) requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
   }
   $('#settings-button').hidden = state.me.role !== 'host';
+  $('#settings-button').disabled = serviceStopped;
+  $('#stop-service').hidden = !state.canStop || serviceStopped;
   $('#share-button').hidden = state.me.role !== 'host';
   $('#note-count').textContent = state.notes.length;
   const noteLabels = { decision: '已形成的结论', question: '待确认的问题', action: '下一步行动' };
@@ -168,7 +172,7 @@ function updateComposer() {
   document.querySelectorAll('[data-mode]').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode));
   $('#message-input').placeholder = mode === 'chat' ? '分享你的想法，也可以 @Codex 邀请它参与…' : mode === 'ask' ? '邀请 Codex 结合大家的讨论，提供分析、信息或建议…' : '说明要实现的具体任务，Codex 会在共享工作区执行…';
   $('#composer-hint').textContent = mode === 'chat' ? '消息对房间内所有人可见' : mode === 'ask' ? '会补齐未提交的讨论 · 分析模式不修改文件' : state.me.role === 'host' ? '使用受限工作区权限 · 额外权限需审批' : '本机房主批准后才会开始';
-  $('#send-button').disabled = busy || !$('#message-input').value.trim();
+  $('#send-button').disabled = serviceStopped || busy || !$('#message-input').value.trim();
   $('#send-button').firstChild.textContent = busy ? '发送中 ' : mode === 'chat' ? '发送 ' : mode === 'ask' ? '邀请分析 ' : '提交任务 ';
   $('#reply-preview').hidden = !replyTo;
   if (replyTo) {
@@ -184,7 +188,16 @@ async function enter() {
   events = new EventSource(`/api/events?session=${encodeURIComponent(token)}`);
   events.onopen = () => { connected = true; render(); };
   events.onerror = () => { connected = false; render(); };
+  events.addEventListener('shutdown', showStopped);
   events.addEventListener('state', (event) => { state = JSON.parse(event.data); connected = true; render(); });
+  render();
+}
+function showStopped() {
+  serviceStopped = true;
+  connected = false;
+  events?.close();
+  $('#stop-dialog').close();
+  $('#settings-dialog').close();
   render();
 }
 $('#join-form').addEventListener('submit', async (event) => {
@@ -249,6 +262,17 @@ $('#show-notes').onclick = () => {
 $('#close-notes').onclick = () => $('#context-panel').classList.remove('open');
 $('#show-approvals').onclick = () => modal('#approval-dialog');
 $('#settings-button').onclick = () => { $('#setting-title').value = state.title; $('#setting-topic').value = state.topic; $('#setting-execution').checked = state.settings.allowExecution; modal('#settings-dialog'); };
+$('#stop-service').onclick = () => modal('#stop-dialog');
+$('#confirm-stop-service').onclick = async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await api('/api/stop', {});
+    showStopped();
+  } catch (error) {
+    if (!serviceStopped) toast(error.message);
+  } finally { button.disabled = false; }
+};
 $('#settings-form').onsubmit = async (event) => { event.preventDefault(); try { await api('/api/settings', { title: $('#setting-title').value, topic: $('#setting-topic').value, allowExecution: $('#setting-execution').checked }); $('#settings-dialog').close(); toast('房间设置已更新'); } catch (error) { toast(error.message); } };
 $('#note-form').onsubmit = async (event) => { event.preventDefault(); try { await api('/api/notes', { kind: $('#note-kind').value, text: $('#note-text').value }); $('#note-dialog').close(); } catch (error) { toast(error.message); } };
 $('#jev-switch').onclick = async () => { try { await api('/api/settings', { jevEnabled: !state.settings.jevEnabled }); } catch (error) { toast(error.message); } };

@@ -23,6 +23,10 @@ export class CodexRpc extends EventEmitter {
     this.nextId = 1;
     this.stopped = false;
     this.child = spawn(binary, ['app-server', '--stdio', ...args], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    this.exited = new Promise((resolve) => {
+      this.child.once('exit', resolve);
+      this.child.once('close', resolve);
+    });
     this.child.on('error', (error) => this.fail(error));
     this.child.on('exit', (code, signal) => this.fail(new Error(`Codex 进程结束（${signal || code}）`)));
     this.child.stderr.on('data', (data) => this.emit('log', String(data)));
@@ -75,7 +79,14 @@ export class CodexRpc extends EventEmitter {
     this.emit('disconnected', error);
   }
   close() {
-    this.fail(new Error('GroupTalk 已停止'));
-    this.child.kill('SIGTERM');
+    if (!this.closing) {
+      this.closing = true;
+      this.fail(new Error('GroupTalk 已停止'));
+      if (this.child.kill('SIGTERM')) {
+        const force = setTimeout(() => this.child.kill('SIGKILL'), 2500);
+        void this.exited.then(() => clearTimeout(force));
+      }
+    }
+    return this.exited;
   }
 }

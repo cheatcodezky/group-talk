@@ -391,7 +391,6 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
     this.closed = true;
     for (const entry of this.runtimeApprovals.values()) entry.remove();
     this.invalidateJudge();
-    this.sideChats.close();
-    this.agent.close();
+    return Promise.all([this.sideChats.close(), this.agent.close()]);
   }
 }

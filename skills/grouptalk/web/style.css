@@ -76,3 +76,8 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .message.history-message { opacity: 1; }
 .source-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
 .source-files button { border: 1px solid #ded6f0; border-radius: 6px; padding: 5px 8px; color: #564698; background: #fff; font-size: 11px; text-align: left; overflow-wrap: anywhere; }
+#stop-service { margin-right: auto; }
+.danger-button { color: #a4353d; }
+.danger-button:hover { background: #faecec; }
+.danger-primary { background: #a4353d; }
+.danger-primary:hover { background: #8d2931; }

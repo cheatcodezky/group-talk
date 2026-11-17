@@ -114,6 +114,39 @@ test('邀请链接使用真实局域网地址，实体网卡优先且本机入�
   assert.equal(localOnly.length, 1); assert.equal(localOnly[0].localOnly, true);
 });
 
+test('只有本机房主能停止服务，收到成功响应后向成员发送停止事件', async (t) => {
+  const f = await fixture();
+  let stops = 0;
+  let closed;
+  const web = await serve({ room: f.room, host: '0.0.0.0', port: 0, onStop: () => {
+    stops++;
+    closed = web.close({ notifyStop: true });
+  } });
+  t.after(async () => { f.room.close(); await (closed || web.close()); f.store.close(); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const stop = (token, url = base) => fetch(url + '/api/stop', {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: '{}',
+  });
+  const bootstrap = (token) => fetch(base + '/api/bootstrap', { headers: { authorization: `Bearer ${token}` } }).then((result) => result.json());
+  assert.equal((await bootstrap(f.tokens.owner)).canStop, true);
+  assert.equal((await bootstrap(f.tokens.alice)).canStop, false);
+  assert.equal((await stop()).status, 401);
+  assert.equal((await stop(f.tokens.alice)).status, 403);
+  const lan = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal);
+  if (lan) assert.equal((await stop(f.tokens.owner, `http://${lan.address}:${web.port}`)).status, 403);
+  assert.equal(stops, 0);
+
+  const events = await fetch(base + '/api/events?session=' + f.tokens.alice, { signal: AbortSignal.timeout(5000) });
+  const stream = events.text();
+  const result = await stop(f.tokens.owner);
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { ok: true });
+  assert.match(await stream, /event: shutdown\ndata: \{\}/);
+  assert.equal(stops, 1);
+  await closed;
+  await assert.rejects(fetch(base + '/api/health'));
+});
+
 test('留空时分配房主与成员昵称，连接地址只给房主并以实际连接为准', async (t) => {
   const f = await fixture();
   const mac = '02:11:22:33:44:55';
