@@ -7,6 +7,7 @@ import { HttpError } from './room.mjs';
 import { clientAddress, lookupClientMac } from './neighbors.mjs';
 import { indexSourceFiles, MAX_MARKDOWN_BYTES } from './source-files.mjs';
 import { createPreviewAccess, previewPolicy, renderMarkdown } from './preview.mjs';
+import { roomOverview } from './overview.mjs';
 
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -45,16 +46,19 @@ export function invitationLinks({ port, host, invite, interfaces = networkInterf
 export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac, onStop }) {
   const source = await indexSourceFiles(room);
   const previewAccess = createPreviewAccess();
-  const snapshot = (member) => ({ ...room.snapshot(member), sourceFiles: source.files, canStop: Boolean(onStop) && member.role === 'host' });
+  const snapshot = (member, overview = roomOverview(room.state, source.files)) => ({
+    ...room.snapshot(member), sourceFiles: source.files, overview, canStop: Boolean(onStop) && member.role === 'host',
+  });
   const streams = new Set();
   let stopRequested = false;
   let flushTimer;
   const flush = async () => {
     flushTimer = null;
     await source.refresh();
+    const overview = roomOverview(room.state, source.files);
     for (const stream of streams) {
       if (stream.res.writableLength > 2_000_000) { stream.res.destroy(); continue; }
-      stream.res.write(`event: state\ndata: ${JSON.stringify(snapshot(stream.member))}\n\n`);
+      stream.res.write(`event: state\ndata: ${JSON.stringify(snapshot(stream.member, overview))}\n\n`);
     }
   };
   const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, 35); };

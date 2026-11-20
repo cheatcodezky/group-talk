@@ -30,9 +30,13 @@ const avatar = (id, name) => `<span class="avatar color-${memberColor(id)}" aria
 const statusLabels = { awaiting_approval: '待房主审批', queued: '等待中', starting: '提交中', running: '进行中', completed: '已完成', cancelled: '已停止', failed: '未完成', needs_review: '需要检查' };
 const sideChat = setupSideChat({ $, api, toast, esc, rich, newMessageId });
 
+function sourceFileAttributes(messageId, file) {
+  return `data-source-message="${esc(messageId)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
+}
+
 function sourceFileActions(message, files) {
   return files.map((file) => {
-    const source = `data-source-message="${esc(message.id)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
+    const source = sourceFileAttributes(message.id, file);
     const title = file.label === file.name ? file.name : `${file.label} · ${file.name}`;
     const download = `<button type="button" ${source} aria-label="下载 ${esc(file.name)}">下载</button>`;
     if (file.imageType) return `<span class="source-file-actions source-image-actions"><button type="button" class="source-thumbnail" ${source} data-source-image aria-label="放大 ${esc(title)}">` +
@@ -40,6 +44,41 @@ function sourceFileActions(message, files) {
     if (!file.preview) return `<button type="button" ${source}>下载 ${esc(title)}</button>`;
     return `<span class="source-file-actions"><button type="button" ${source} data-preview="${esc(file.preview)}">打开 ${esc(title)}</button>${download}</span>`;
   }).join('');
+}
+
+function overviewFile(file) {
+  const type = file.imageType ? '图片' : { html: 'HTML', markdown: 'MD' }[file.preview] || '附件';
+  const action = file.imageType ? 'data-source-image' : file.preview ? `data-preview="${esc(file.preview)}"` : '';
+  const verb = action ? '打开' : '下载';
+  return `<li><button type="button" class="overview-file" ${sourceFileAttributes(file.messageId, file)} ${action}
+    aria-label="${verb} ${esc(file.label)}" title="${esc(file.name)}"><small>${type}</small><span>${esc(file.label)}</span></button></li>`;
+}
+
+let overviewSignature = '';
+function renderOverview() {
+  const { title, goal, points, files, messageId, task } = state.overview || { points: [], files: [] };
+  const signature = JSON.stringify(state.overview ?? null);
+  if (signature === overviewSignature) return;
+  overviewSignature = signature;
+  const expanded = $('#overview-more-files')?.open;
+  const primary = files.slice(0, 4);
+  const image = files.find((file) => file.imageType);
+  const documentFile = files.find((file) => file.preview);
+  if (image && !primary.some((file) => file.imageType)) primary[primary.length - 1] = image;
+  if (documentFile && !primary.some((file) => file.preview)) primary[0] = documentFile;
+  const more = files.filter((file) => !primary.includes(file));
+  $('#room-overview-body').innerHTML = `
+    ${title ? `<p class="overview-subject">${esc(title)}</p>` : ''}
+    ${goal ? `<p class="overview-goal">${esc(goal)}</p>` : ''}
+    ${task ? `<p class="overview-current"><strong>${esc(statusLabels[task.status])}</strong> ${esc(task.request)}</p>` : ''}
+    ${points.length ? `<dl class="overview-points">${points.map(({ label, text }) =>
+      `<div><dt>${esc(label)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>` : ''}
+    ${messageId && (title || points.length) ? `<button type="button" class="overview-jump" data-overview-message="${esc(messageId)}">查看上下文</button>` : ''}
+    <div class="overview-files">
+      <h3>关键产物 <span>${files.length}</span></h3>
+      ${primary.length ? `<ul>${primary.map(overviewFile).join('')}</ul>` : '<p class="overview-empty">共享的文档和图片会出现在这里。</p>'}
+      ${more.length ? `<details id="overview-more-files"${expanded ? ' open' : ''}><summary>其他产物（${more.length}）</summary><ul>${more.map(overviewFile).join('')}</ul></details>` : ''}
+    </div>`;
 }
 
 function renderMessage(message) {
@@ -132,7 +171,8 @@ const imageObserver = new IntersectionObserver((entries) => {
 function syncSourceThumbnails() {
   imageObserver.disconnect();
   const buttons = [...$('#messages').querySelectorAll('[data-source-image]')];
-  const visible = new Set(buttons.map(sourceFileUrl));
+  const overviewImages = $('#room-overview-body').querySelectorAll('[data-source-image]');
+  const visible = new Set([...buttons, ...overviewImages].map(sourceFileUrl));
   for (const [path, pending] of imageUrls) {
     if (visible.has(path)) continue;
     imageUrls.delete(path);
@@ -184,6 +224,7 @@ function renderApprovals() {
 }
 function render() {
   if (!state) return;
+  renderOverview();
   $('#room-title').textContent = state.title;
   $('#room-topic').textContent = state.topic;
   document.title = `${state.title} · GroupTalk`;
@@ -321,6 +362,15 @@ document.addEventListener('click', async (event) => {
       conversationView = button.dataset.conversationView;
       render();
       $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
+    }
+    if (button.dataset.overviewMessage) {
+      const found = state.messages.find(({ id }) => id === button.dataset.overviewMessage);
+      if (found) {
+        conversationView = found.history ? 'source' : 'room';
+        $('#context-panel').classList.remove('open');
+        render();
+        requestAnimationFrame(() => document.getElementById(`message-${found.id}`)?.scrollIntoView({ block: 'center' }));
+      }
     }
     if (button.dataset.sourceMessage) {
       button.disabled = true;

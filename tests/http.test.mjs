@@ -270,8 +270,8 @@ test('房间运行中新回复链接的产物对成员可见', async (t) => {
   assert.equal(snapshot.status, 200);
   const { sourceFiles } = await snapshot.json();
   assert.deepEqual(sourceFiles[reply.id], [
-    { index: 0, label: '内存曲线', name: 'plot.PNG', imageType: 'image/png' },
-    { index: 1, label: 'report.md', name: 'report.md', preview: 'markdown' },
+    { index: 0, assetId: 0, label: '内存曲线', name: 'plot.PNG', imageType: 'image/png' },
+    { index: 1, assetId: 1, label: 'report.md', name: 'report.md', preview: 'markdown' },
   ]);
   const source = `${base}/api/source-files/${reply.id}/0`;
   assert.equal((await fetch(source)).status, 401);
@@ -280,6 +280,41 @@ test('房间运行中新回复链接的产物对成员可见', async (t) => {
   assert.equal(result.headers.get('content-type'), 'image/png');
   assert.match(result.headers.get('content-disposition'), /^attachment;/);
   assert.deepEqual(Buffer.from(await result.arrayBuffer()), png);
+});
+
+test('新成员入场即可看到可核对的速览和去重后的产物入口', async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'grouptalk-overview-'));
+  const report = join(cwd, 'review.md');
+  writeFileSync(report, '# 评审材料');
+  const f = await fixture({ cwd });
+  const recap = f.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex', history: true, text: [
+    '# 性能评审', '', '评审目标是比较两个版本在同一台机器上的内存开销。', '',
+    '当前已完成采样脚本，可按场景输出重复采样结果。', '', '## 已验证', '',
+    '| 指标 | 结果 |', '| --- | --- |', '| 有效样本 | 31/31 |', '', '## 待确认', '',
+    '| 待确认 | 建议 |', '| --- | --- |', '| 登录态 | 固定账号 |', '', '[技术文档](review.md)',
+  ].join('\n') });
+  const web = await serve({ room: f.room, host: '127.0.0.1', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); rmSync(report); rmdirSync(cwd); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const member = { headers: { authorization: `Bearer ${f.tokens.bob}` } };
+  const initial = await (await fetch(`${base}/api/bootstrap`, member)).json();
+  assert.equal(initial.overview.title, '性能评审');
+  assert.equal(initial.overview.messageId, recap.id);
+  assert.match(initial.overview.goal, /同一台机器/);
+  assert.deepEqual(initial.overview.points, [
+    { label: '当前进展', text: '当前已完成采样脚本，可按场景输出重复采样结果。' },
+    { label: '实测结果', text: '有效样本 31/31' },
+    { label: '待确认', text: '登录态' },
+  ]);
+  assert.deepEqual(initial.overview.files.map(({ name }) => name), ['review.md']);
+  const updated = f.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex',
+    text: '当前已补齐采样数据，可以检查新增的采样结果。\n\n更新版见 [评审稿](review.md)。' });
+  f.room.addNote(f.alice, { kind: 'decision', text: '双方统一使用测试账号' });
+  const latest = await (await fetch(`${base}/api/bootstrap`, member)).json();
+  assert.equal(latest.overview.messageId, recap.id);
+  assert.deepEqual(latest.overview.points[0], { label: '共同结论', text: '双方统一使用测试账号' });
+  assert.deepEqual(latest.overview.points[1], { label: '当前进展', text: '当前已补齐采样数据，可以检查新增的采样结果。' });
+  assert.deepEqual(latest.overview.files.map(({ name, messageId }) => [name, messageId]), [['review.md', updated.id]]);
 });
 
 test('成员可读取本房间和来源会话明确链接的 Codex 生成图片', async (t) => {

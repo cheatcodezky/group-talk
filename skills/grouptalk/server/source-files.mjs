@@ -35,6 +35,7 @@ export async function indexSourceFiles(room) {
     shareable(join(home, 'generated_images', id), path, IMAGES));
   const allowedResolvedPath = (path) => shareable(root, path) || generatedImage(realCodexHome, path);
   const byMessage = new Map();
+  const assetIds = new Map();
   const files = Object.create(null);
   let scanned = 0;
   let pending = Promise.resolve();
@@ -65,7 +66,9 @@ export async function indexSourceFiles(room) {
         const extension = extname(name).toLowerCase();
         const kind = PREVIEWS.get(extension);
         const preview = kind === 'markdown' && stat.size > MAX_MARKDOWN_BYTES ? null : kind;
-        items.push({ index: entries.length, label: label.trim() || name, name, preview, imageType: IMAGES.get(extension) });
+        if (!assetIds.has(resolved)) assetIds.set(resolved, assetIds.size);
+        items.push({ index: entries.length, assetId: assetIds.get(resolved), label: label.trim() || name,
+          name, preview, imageType: IMAGES.get(extension) });
         entries.push({ path, resolved });
       } catch { /* Links to unavailable files are omitted. */ }
     }
