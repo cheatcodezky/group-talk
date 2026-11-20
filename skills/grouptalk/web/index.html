@@ -85,6 +85,10 @@
       <div class="dialog-actions"><button type="button" class="text-button" data-close>取消</button><button type="submit" class="primary">创建侧聊</button></div>
     </form>
   </dialog>
+  <dialog id="source-preview-dialog" aria-labelledby="source-preview-title">
+    <div class="dialog-heading"><h2 id="source-preview-title">产物预览</h2><button type="button" class="icon-button" data-close aria-label="关闭预览">×</button></div>
+    <iframe id="source-preview-frame" title="产物预览" sandbox referrerpolicy="no-referrer"></iframe>
+  </dialog>
   <dialog id="share-dialog"><div class="dialog-heading"><h2>邀请同伴，一起讨论</h2><button class="icon-button" data-close aria-label="关闭">×</button></div><p>同一局域网中，打开链接即可加入。加入者可以查看共享历史和讨论结果。</p><label for="share-address">访问地址</label><select id="share-address"></select><label for="share-link">邀请链接</label><input id="share-link" readonly><p id="share-address-hint" class="muted small"></p><div class="dialog-actions"><button id="rotate-invite" class="text-button">重置邀请链接</button><button id="copy-link" class="primary">复制链接</button></div><p class="muted small">房主入口与邀请链接分开，请分享上面的成员链接。</p></dialog>
   <dialog id="approval-dialog" aria-labelledby="approval-title">
     <div class="dialog-heading"><h2 id="approval-title">操作审批</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div>

@@ -5,7 +5,7 @@ import { FakeAgent, fixture, message, until } from './helpers.mjs';
 import { networkInterfaces } from 'node:os';
 import { request } from 'node:http';
 import { clientAddress, macFromNeighbors } from '../skills/grouptalk/server/neighbors.mjs';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -185,20 +185,25 @@ test('识别 IPv4 映射地址及各平台邻居记录，仅返回对应 IP 的�
   assert.equal(macFromNeighbors(`${ip} dev eth0 lladdr 0a:1b:02:33:44:05 STALE\n${ip} dev eth1 lladdr 0a:1b:02:33:44:06 STALE`, ip), null);
 });
 
-test('房主与成员可查看来源消息并下载明确链接的工作区产出', async (t) => {
+test('房主与成员可预览和下载明确链接的工作区产出', async (t) => {
   const temp = mkdtempSync(join(tmpdir(), 'grouptalk-source-files-'));
   const cwd = join(temp, 'project');
   mkdirSync(cwd);
   const report = join(cwd, '设计 文档.md');
+  const page = join(cwd, '交互报告.html');
   const outside = join(temp, 'outside.md');
   const dotfile = join(cwd, '.private.md');
   const example = join(cwd, 'example.md');
   const alias = join(cwd, 'shortcut.md');
-  for (const path of [report, outside, dotfile, example]) writeFileSync(path, '这是验收文件');
+  for (const path of [outside, dotfile, example]) writeFileSync(path, '这是验收文件');
+  const markdown = '# 采样结果\n\n| 指标 | 结果 |\n| -- | -- |\n| 采样率 | 100% |\n\n<script>无效的原始 HTML</script>';
+  const html = '<!doctype html><title>采样</title><script>document.title = "交互采样";</script>';
+  writeFileSync(report, markdown);
+  writeFileSync(page, html);
   if (process.platform !== 'win32') symlinkSync(outside, alias);
   const history = [{ items: [
     { type: 'userMessage', content: [{ type: 'text', text: `[用户引用](<${example}>)` }] },
-    { type: 'agentMessage', text: `已完成 [设计文档](<${report}:12>)。\n[房间外](<${outside}>)\n[隐藏](<${dotfile}>)\n[软链接](<${alias}>)\n` +
+    { type: 'agentMessage', text: `已完成 [设计文档](<${report}:12>)。[交互报告](<${page}>)\n[房间外](<${outside}>)\n[隐藏](<${dotfile}>)\n[软链接](<${alias}>)\n` +
       '`[示例](<' + example + '>)`' },
   ] }];
   const f = await fixture({ cwd, sourceThreadId: 'test-source', agent: new FakeAgent({ history }) });
@@ -211,18 +216,55 @@ test('房主与成员可查看来源消息并下载明确链接的工作区产�
   assert.deepEqual(member.messages.map(({ role, history }) => ({ role, history })), [{ role: 'user', history: true }, { role: 'agent', history: true }]);
   assert.deepEqual(member.sourceFiles, owner.sourceFiles);
   const agentMessage = member.messages.find(({ role }) => role === 'agent');
-  const [{ index, label, name }] = member.sourceFiles[agentMessage.id];
-  assert.equal(Object.values(member.sourceFiles).flat().length, 1);
+  const [{ index, label, name, preview }, htmlFile] = member.sourceFiles[agentMessage.id];
+  assert.equal(Object.values(member.sourceFiles).flat().length, 2);
   assert.equal(label, '设计文档');
   assert.equal(name, '设计 文档.md');
+  assert.equal(preview, 'markdown');
+  assert.equal(htmlFile.preview, 'html');
   const endpoint = `/api/source-files/${agentMessage.id}/${index}`;
   assert.equal((await get(endpoint)).status, 401);
   const download = await get(endpoint, f.tokens.alice);
   assert.equal(download.status, 200);
   assert.match(download.headers.get('content-disposition'), /^attachment;/);
-  assert.equal(await download.text(), '这是验收文件');
-  assert.equal((await get(`/api/source-files/${agentMessage.id}/1`, f.tokens.alice)).status, 404);
-  rmSync(report);
+  assert.equal(await download.text(), markdown);
+  assert.equal((await get(`/api/source-files/${agentMessage.id}/2`, f.tokens.alice)).status, 404);
+  assert.equal((await get(`${endpoint}/preview`)).status, 401);
+  const { url } = await (await get(`${endpoint}/preview`, f.tokens.alice)).json();
+  const rendered = await get(url);
+  assert.equal(rendered.status, 200);
+  assert.match(rendered.headers.get('content-type'), /^text\/html/);
+  assert.match(rendered.headers.get('content-security-policy'), /script-src 'none'/);
+  const renderedMarkdown = await rendered.text();
+  assert.match(renderedMarkdown, /<h1>采样结果<\/h1>/);
+  assert.match(renderedMarkdown, /<table>/);
+  assert.doesNotMatch(renderedMarkdown, /<script>/);
+  const [address, ticket] = url.split('?');
+  assert.equal((await get(address)).status, 404);
+  assert.equal((await get(`${address.replace(/\/\d+$/, `/${htmlFile.index}`)}?${ticket}`)).status, 404);
+  const { url: htmlUrl } = await (await get(`/api/source-files/${agentMessage.id}/${htmlFile.index}/preview`, f.tokens.alice)).json();
+  const renderedHtml = await get(htmlUrl);
+  assert.match(renderedHtml.headers.get('content-security-policy'), /sandbox allow-scripts;/);
+  assert.equal(await renderedHtml.text(), html);
+  renameSync(report, join(cwd, 'moved.md'));
   if (process.platform !== 'win32') symlinkSync(outside, report);
   assert.equal((await get(endpoint, f.tokens.alice)).status, 404);
+});
+
+test('房间运行中新回复链接的产物对成员可见', async (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'grouptalk-live-source-file-'));
+  const report = join(cwd, 'report.md');
+  writeFileSync(report, '# 房间产出');
+  const f = await fixture({ cwd });
+  const web = await serve({ room: f.room, host: '127.0.0.1', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); rmSync(report); rmdirSync(cwd); });
+  const reply = f.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex',
+    text: `:codex-file-citation{path="${report}" purpose="output"}` });
+  f.room.commit();
+  const snapshot = await fetch(`http://127.0.0.1:${web.port}/api/bootstrap`, {
+    headers: { authorization: `Bearer ${f.tokens.bob}` },
+  });
+  assert.equal(snapshot.status, 200);
+  const { sourceFiles } = await snapshot.json();
+  assert.deepEqual(sourceFiles[reply.id], [{ index: 0, label: 'report.md', name: 'report.md', preview: 'markdown' }]);
 });

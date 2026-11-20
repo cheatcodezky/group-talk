@@ -5,7 +5,8 @@ import { networkInterfaces } from 'node:os';
 import { pipeline } from 'node:stream/promises';
 import { HttpError } from './room.mjs';
 import { clientAddress, lookupClientMac } from './neighbors.mjs';
-import { indexSourceFiles } from './source-files.mjs';
+import { indexSourceFiles, MAX_MARKDOWN_BYTES } from './source-files.mjs';
+import { createPreviewAccess, previewPolicy, renderMarkdown } from './preview.mjs';
 
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -43,12 +44,14 @@ export function invitationLinks({ port, host, invite, interfaces = networkInterf
 
 export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac, onStop }) {
   const source = await indexSourceFiles(room);
+  const previewAccess = createPreviewAccess();
   const snapshot = (member) => ({ ...room.snapshot(member), sourceFiles: source.files, canStop: Boolean(onStop) && member.role === 'host' });
   const streams = new Set();
   let stopRequested = false;
   let flushTimer;
-  const flush = () => {
+  const flush = async () => {
     flushTimer = null;
+    await source.refresh();
     for (const stream of streams) {
       if (stream.res.writableLength > 2_000_000) { stream.res.destroy(); continue; }
       stream.res.write(`event: state\ndata: ${JSON.stringify(snapshot(stream.member))}\n\n`);
@@ -72,6 +75,29 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
         res.end(await readFile(`${WEB}${file}`)); return;
       }
       if (url.pathname === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, runtime: room.runtime.state });
+      const preview = url.pathname.match(/^\/source-preview\/([\da-f-]+)\/(\d+)$/);
+      if (preview && req.method === 'GET') {
+        if (!previewAccess.allows(url.pathname, url.searchParams.get('ticket'))) throw new HttpError(404, '预览链接无效或已过期');
+        const [, message, index] = preview;
+        const kind = source.files[message]?.find((item) => item.index === Number(index))?.preview;
+        if (!kind) throw new HttpError(404, '此文件没有可用预览');
+        const { file, name, size } = await source.read(message, Number(index));
+        const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+          'content-security-policy': previewPolicy(kind) };
+        if (kind === 'markdown') {
+          try {
+            if (size > MAX_MARKDOWN_BYTES) throw new HttpError(413, 'Markdown 文件过大，请下载原件查看');
+            const bytes = Buffer.alloc(size);
+            const { bytesRead } = await file.read(bytes, 0, size, 0);
+            const page = renderMarkdown(bytes.subarray(0, bytesRead).toString('utf-8'), name);
+            res.writeHead(200, headers);
+            return res.end(page);
+          } finally { await file.close(); }
+        }
+        res.writeHead(200, { ...headers, 'content-length': size });
+        if (!size) { await file.close(); return res.end(); }
+        return await pipeline(file.createReadStream({ end: size - 1 }), res);
+      }
       if (req.method === 'POST') {
         const origin = req.headers.origin;
         if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) throw new HttpError(403, '请求来源不正确');
@@ -106,7 +132,15 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       }
       if (url.pathname === '/api/bootstrap' && req.method === 'GET') {
         observe(req, member.id);
+        await source.refresh();
         return json(res, 200, snapshot(member));
+      }
+      const previewRequest = url.pathname.match(/^\/api\/source-files\/([\da-f-]+)\/(\d+)\/preview$/);
+      if (previewRequest && req.method === 'GET') {
+        const [, message, index] = previewRequest;
+        const item = source.files[message]?.find((entry) => entry.index === Number(index));
+        if (!item?.preview) throw new HttpError(404, '此文件没有可用预览');
+        return json(res, 200, { url: previewAccess.url(`/source-preview/${message}/${index}`) });
       }
       const sourceFile = url.pathname.match(/^\/api\/source-files\/([\da-f-]+)\/(\d+)$/);
       if (sourceFile && req.method === 'GET') {
@@ -120,6 +154,7 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       }
       if (url.pathname === '/api/events' && req.method === 'GET') {
         observe(req, member.id);
+        await source.refresh();
         res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' });
         const stream = { member, res }; streams.add(stream);
         const disconnect = room.connect(member);

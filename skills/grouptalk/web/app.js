@@ -30,6 +30,16 @@ const avatar = (id, name) => `<span class="avatar color-${memberColor(id)}" aria
 const statusLabels = { awaiting_approval: '待房主审批', queued: '等待中', starting: '提交中', running: '进行中', completed: '已完成', cancelled: '已停止', failed: '未完成', needs_review: '需要检查' };
 const sideChat = setupSideChat({ $, api, toast, esc, rich, newMessageId });
 
+function sourceFileActions(message, files) {
+  return files.map((file) => {
+    const source = `data-source-message="${esc(message.id)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
+    const title = file.label === file.name ? file.name : `${file.label} · ${file.name}`;
+    if (!file.preview) return `<button type="button" ${source}>下载 ${esc(title)}</button>`;
+    return `<span class="source-file-actions"><button type="button" ${source} data-preview="${esc(file.preview)}">打开 ${esc(title)}</button>` +
+      `<button type="button" ${source} aria-label="下载 ${esc(file.name)}">下载</button></span>`;
+  }).join('');
+}
+
 function renderMessage(message) {
   const task = state.tasks.find((task) => task.id === message.taskId);
   const quote = message.replyTo && state.messages.find((item) => item.id === message.replyTo);
@@ -52,8 +62,7 @@ function renderMessage(message) {
       ${quote ? `<div class="quote">${esc(quote.authorName)}：${esc(quote.text.slice(0, 180))}</div>` : ''}
       ${shared}
       <div class="message-content">${rich(message.text)}</div>
-      ${files.length ? `<div class="source-files" aria-label="来源对话产出">${files.map((file) =>
-        `<button type="button" data-source-message="${esc(message.id)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}">下载 ${esc(file.label)}${file.label === file.name ? '' : ` · ${esc(file.name)}`}</button>`).join('')}</div>` : ''}
+      ${files.length ? `<div class="source-files" aria-label="对话产物">${sourceFileActions(message, files)}</div>` : ''}
       ${task && isAgent ? `<div class="message-context"><span>◌</span> 已结合 ${task.contextCount || 0} 条新讨论${task.status === 'cancelled' ? ' · 本回合已停止' : ''}</div>` : ''}
       <div class="message-actions">
         <button data-reply="${esc(message.id)}">回复</button>
@@ -63,8 +72,23 @@ function renderMessage(message) {
     </div>
   </article>`;
 }
+const sourceFileUrl = (button) => `/api/source-files/${button.dataset.sourceMessage}/${button.dataset.sourceIndex}`;
+
+async function openSourcePreview(button) {
+  const { url } = await api(`${sourceFileUrl(button)}/preview`);
+  const dialog = $('#source-preview-dialog');
+  const frame = $('#source-preview-frame');
+  $('#source-preview-title').textContent = button.dataset.sourceName;
+  frame.title = button.dataset.sourceName;
+  frame.setAttribute('sandbox', button.dataset.preview === 'html' ? 'allow-scripts' : 'allow-popups allow-popups-to-escape-sandbox');
+  frame.src = url;
+  if (!dialog.open) dialog.showModal();
+}
+
+$('#source-preview-dialog').addEventListener('close', () => { $('#source-preview-frame').removeAttribute('src'); });
+
 async function downloadSourceFile(button) {
-  const response = await fetch(`/api/source-files/${button.dataset.sourceMessage}/${button.dataset.sourceIndex}`, {
+  const response = await fetch(sourceFileUrl(button), {
     headers: { authorization: `Bearer ${token}` },
   });
   if (!response.ok) throw new Error((await response.json()).error || '来源文件下载失败');
@@ -236,7 +260,13 @@ document.addEventListener('click', async (event) => {
       render();
       $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
     }
-    if (button.dataset.sourceMessage) await downloadSourceFile(button);
+    if (button.dataset.sourceMessage) {
+      button.disabled = true;
+      try {
+        if (button.dataset.preview) await openSourcePreview(button);
+        else await downloadSourceFile(button);
+      } finally { button.disabled = false; }
+    }
     if (button.dataset.mode) { mode = button.dataset.mode; clientId = null; updateComposer(); $('#message-input').focus(); }
     if (button.dataset.reply) { replyTo = button.dataset.reply; updateComposer(); $('#message-input').focus(); }
     if (button.id === 'clear-reply') { replyTo = null; updateComposer(); }

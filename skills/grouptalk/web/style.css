@@ -76,6 +76,12 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .message.history-message { opacity: 1; }
 .source-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0; }
 .source-files button { border: 1px solid #ded6f0; border-radius: 6px; padding: 5px 8px; color: #564698; background: #fff; font-size: 11px; text-align: left; overflow-wrap: anywhere; }
+.source-file-actions { display: inline-flex; gap: 4px; max-width: 100%; }
+.source-file-actions button:last-child { flex-shrink: 0; }
+#source-preview-dialog { width: min(1180px, calc(100vw - 28px)); max-width: none; padding: 0; overflow: hidden; }
+#source-preview-dialog .dialog-heading { margin: 0; padding: 8px 16px; border-bottom: 1px solid #e4e5de; }
+#source-preview-title { overflow-wrap: anywhere; }
+#source-preview-frame { display: block; width: 100%; height: 78vh; height: 78dvh; border: 0; background: white; }
 #stop-service { margin-right: auto; }
 .danger-button { color: #a4353d; }
 .danger-button:hover { background: #faecec; }
