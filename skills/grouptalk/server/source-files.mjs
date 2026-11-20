@@ -1,11 +1,13 @@
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
-import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError } from './validation.mjs';
 
 const PREVIEWS = new Map([['.html', 'html'], ['.htm', 'html'], ['.md', 'markdown'], ['.markdown', 'markdown']]);
-const FORMATS = new Set([...PREVIEWS.keys(), '.txt', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.docx', '.xlsx', '.pptx']);
+const IMAGES = new Map([['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.webp', 'image/webp'], ['.gif', 'image/gif']]);
+const FORMATS = new Set([...PREVIEWS.keys(), ...IMAGES.keys(), '.txt', '.csv', '.pdf', '.docx', '.xlsx', '.pptx']);
 const MAX_BYTES = 32 * 1024 * 1024;
 export const MAX_MARKDOWN_BYTES = 2 * 1024 * 1024;
 
@@ -17,14 +19,21 @@ function localPath(target) {
   } catch { return null; }
 }
 
-function shareable(root, path) {
+function shareable(root, path, formats = FORMATS) {
   const name = relative(root, path);
   return Boolean(name) && !isAbsolute(name) && !name.split(sep).some((part) => part.startsWith('.') || part.toLowerCase() === 'node_modules')
-    && FORMATS.has(extname(name).toLowerCase());
+    && formats.has(extname(name).toLowerCase());
 }
 
 export async function indexSourceFiles(room) {
   const root = await realpath(room.cwd).catch(() => null);
+  const codexHome = resolve(process.env.CODEX_HOME || join(homedir(), '.codex'));
+  const realCodexHome = await realpath(codexHome).catch(() => null);
+  const threadIds = [...new Set([room.state.threadId, room.state.sourceThreadId])].filter((id) =>
+    typeof id === 'string' && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id));
+  const generatedImage = (home, path) => home && threadIds.some((id) =>
+    shareable(join(home, 'generated_images', id), path, IMAGES));
+  const allowedResolvedPath = (path) => shareable(root, path) || generatedImage(realCodexHome, path);
   const byMessage = new Map();
   const files = Object.create(null);
   let scanned = 0;
@@ -44,18 +53,19 @@ export async function indexSourceFiles(room) {
       const local = localPath(target);
       if (!local || (!isAbsolute(local) && /^[\w+.-]+:/.test(local))) continue;
       const path = resolve(room.cwd, local);
-      if (!shareable(room.cwd, path) && !shareable(root, path)) continue;
+      if (!shareable(room.cwd, path) && !generatedImage(codexHome, path) && !allowedResolvedPath(path)) continue;
       try {
         const resolved = await realpath(path);
-        if (!shareable(root, resolved) || visited.has(resolved)) continue;
+        if (!allowedResolvedPath(resolved) || visited.has(resolved)) continue;
         const file = await open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
         const stat = await file.stat().finally(() => file.close());
         if (!stat.isFile() || stat.size > MAX_BYTES) continue;
         visited.add(resolved);
         const name = basename(resolved);
-        const kind = PREVIEWS.get(extname(name).toLowerCase());
+        const extension = extname(name).toLowerCase();
+        const kind = PREVIEWS.get(extension);
         const preview = kind === 'markdown' && stat.size > MAX_MARKDOWN_BYTES ? null : kind;
-        items.push({ index: entries.length, label: label.trim() || name, name, preview });
+        items.push({ index: entries.length, label: label.trim() || name, name, preview, imageType: IMAGES.get(extension) });
         entries.push({ path, resolved });
       } catch { /* Links to unavailable files are omitted. */ }
     }
@@ -86,12 +96,12 @@ export async function indexSourceFiles(room) {
       const entry = byMessage.get(messageId)[index];
       try {
         const resolved = await realpath(entry.path);
-        if (resolved !== entry.resolved || !shareable(root, resolved)) throw new Error('file location changed');
+        if (resolved !== entry.resolved || !allowedResolvedPath(resolved)) throw new Error('file location changed');
         const file = await open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
         try {
           const stat = await file.stat();
           if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('invalid source file');
-          return { file, name: metadata.name, size: stat.size };
+          return { file, name: metadata.name, size: stat.size, imageType: metadata.imageType };
         } catch (error) {
           await file.close();
           throw error;

@@ -78,6 +78,14 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .source-files button { border: 1px solid #ded6f0; border-radius: 6px; padding: 5px 8px; color: #564698; background: #fff; font-size: 11px; text-align: left; overflow-wrap: anywhere; }
 .source-file-actions { display: inline-flex; gap: 4px; max-width: 100%; }
 .source-file-actions button:last-child { flex-shrink: 0; }
+.source-image-actions { align-items: flex-end; }
+.source-image-actions .source-thumbnail { display: grid; place-items: center; width: min(180px, 52vw); height: 108px; padding: 4px; }
+.source-thumbnail img { max-width: 100%; max-height: 98px; object-fit: contain; }
+.source-thumbnail:hover { border-color: #8b76c6; }
+#source-image-dialog { width: fit-content; max-width: min(1100px, calc(100vw - 28px)); padding: 0; overflow: hidden; }
+#source-image-dialog .dialog-heading { margin: 0; padding: 8px 16px; border-bottom: 1px solid #e4e5de; }
+#source-image-title { overflow-wrap: anywhere; }
+#source-image-full { display: block; max-width: min(1100px, calc(100vw - 30px)); max-height: 78vh; max-height: 78dvh; margin: auto; object-fit: contain; }
 #source-preview-dialog { width: min(1180px, calc(100vw - 28px)); max-width: none; padding: 0; overflow: hidden; }
 #source-preview-dialog .dialog-heading { margin: 0; padding: 8px 16px; border-bottom: 1px solid #e4e5de; }
 #source-preview-title { overflow-wrap: anywhere; }

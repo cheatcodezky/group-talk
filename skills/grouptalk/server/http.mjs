@@ -65,7 +65,7 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
   const server = http.createServer(async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
     res.setHeader('referrer-policy', 'no-referrer');
-    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       if (stopRequested && !(url.pathname === '/api/stop' && req.method === 'POST')) throw new HttpError(503, '房间正在停止');
@@ -144,9 +144,9 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       }
       const sourceFile = url.pathname.match(/^\/api\/source-files\/([\da-f-]+)\/(\d+)$/);
       if (sourceFile && req.method === 'GET') {
-        const { file, size, name } = await source.read(sourceFile[1], Number(sourceFile[2]));
+        const { file, size, name, imageType } = await source.read(sourceFile[1], Number(sourceFile[2]));
         res.writeHead(200, {
-          'content-type': 'application/octet-stream', 'content-length': size, 'cache-control': 'no-store',
+          'content-type': imageType || 'application/octet-stream', 'content-length': size, 'cache-control': 'no-store',
           'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name).replace(/['()*]/g, (char) => '%' + char.charCodeAt(0).toString(16))}`,
         });
         if (!size) { await file.close(); return res.end(); }

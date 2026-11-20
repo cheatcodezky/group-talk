@@ -254,17 +254,71 @@ test('房主与成员可预览和下载明确链接的工作区产出', async (t
 test('房间运行中新回复链接的产物对成员可见', async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), 'grouptalk-live-source-file-'));
   const report = join(cwd, 'report.md');
+  const image = join(cwd, 'plot.PNG');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jK9sAAAAASUVORK5CYII=', 'base64');
   writeFileSync(report, '# 房间产出');
+  writeFileSync(image, png);
   const f = await fixture({ cwd });
   const web = await serve({ room: f.room, host: '127.0.0.1', port: 0 });
-  t.after(async () => { f.room.close(); await web.close(); f.store.close(); rmSync(report); rmdirSync(cwd); });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); rmSync(report); rmSync(image); rmdirSync(cwd); });
   const reply = f.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex',
-    text: `:codex-file-citation{path="${report}" purpose="output"}` });
+    text: `:codex-file-citation{path="${report}" purpose="output"}\n\n![内存曲线](plot.PNG)` });
   f.room.commit();
-  const snapshot = await fetch(`http://127.0.0.1:${web.port}/api/bootstrap`, {
-    headers: { authorization: `Bearer ${f.tokens.bob}` },
-  });
+  const base = `http://127.0.0.1:${web.port}`;
+  const member = { headers: { authorization: `Bearer ${f.tokens.bob}` } };
+  const snapshot = await fetch(`${base}/api/bootstrap`, member);
   assert.equal(snapshot.status, 200);
   const { sourceFiles } = await snapshot.json();
-  assert.deepEqual(sourceFiles[reply.id], [{ index: 0, label: 'report.md', name: 'report.md', preview: 'markdown' }]);
+  assert.deepEqual(sourceFiles[reply.id], [
+    { index: 0, label: '内存曲线', name: 'plot.PNG', imageType: 'image/png' },
+    { index: 1, label: 'report.md', name: 'report.md', preview: 'markdown' },
+  ]);
+  const source = `${base}/api/source-files/${reply.id}/0`;
+  assert.equal((await fetch(source)).status, 401);
+  const result = await fetch(source, member);
+  assert.equal(result.status, 200);
+  assert.equal(result.headers.get('content-type'), 'image/png');
+  assert.match(result.headers.get('content-disposition'), /^attachment;/);
+  assert.deepEqual(Buffer.from(await result.arrayBuffer()), png);
+});
+
+test('成员可读取本房间和来源会话明确链接的 Codex 生成图片', async (t) => {
+  const temp = mkdtempSync(join(tmpdir(), 'grouptalk-generated-images-'));
+  const cwd = join(temp, 'project');
+  const codexHome = join(temp, 'codex');
+  const generated = join(codexHome, 'generated_images');
+  const rooms = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002',
+    '00000000-0000-4000-8000-000000000003'];
+  const [current, source, other] = rooms.map((id) => join(generated, id, 'plot.png'));
+  const text = join(generated, rooms[0], 'notes.md');
+  mkdirSync(cwd);
+  mkdirSync(generated, { recursive: true });
+  const f = await fixture({ cwd });
+  [f.store.state.threadId, f.store.state.sourceThreadId] = rooms;
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = codexHome;
+  let web;
+  try { web = await serve({ room: f.room, host: '127.0.0.1', port: 0 }); }
+  finally {
+    if (previousHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousHome;
+  }
+  t.after(async () => {
+    f.room.close(); await web.close(); f.store.close();
+    for (const path of [current, source, other, text]) rmSync(path, { force: true });
+    for (const path of [...rooms.map((id) => join(generated, id)), generated, codexHome, cwd, temp]) rmdirSync(path);
+  });
+  for (const id of rooms) mkdirSync(join(generated, id));
+  for (const path of [current, source, other, text]) writeFileSync(path, '验收内容');
+  const reply = f.store.addMessage({ role: 'agent', authorId: 'codex', authorName: 'Codex',
+    text: `![房间生成](<${current}>) ![来源生成](<${source}>) ![其他会话](<${other}>) [文本](<${text}>)` });
+  f.room.commit();
+  const base = `http://127.0.0.1:${web.port}`;
+  const member = { headers: { authorization: `Bearer ${f.tokens.alice}` } };
+  const { sourceFiles } = await (await fetch(`${base}/api/bootstrap`, member)).json();
+  assert.deepEqual(sourceFiles[reply.id].map(({ label, imageType }) => [label, imageType]),
+    [['房间生成', 'image/png'], ['来源生成', 'image/png']]);
+  const result = await fetch(`${base}/api/source-files/${reply.id}/0`, member);
+  assert.equal(result.status, 200);
+  assert.equal(await result.text(), '验收内容');
 });

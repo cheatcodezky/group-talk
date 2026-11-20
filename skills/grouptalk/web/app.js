@@ -34,9 +34,11 @@ function sourceFileActions(message, files) {
   return files.map((file) => {
     const source = `data-source-message="${esc(message.id)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
     const title = file.label === file.name ? file.name : `${file.label} · ${file.name}`;
+    const download = `<button type="button" ${source} aria-label="下载 ${esc(file.name)}">下载</button>`;
+    if (file.imageType) return `<span class="source-file-actions source-image-actions"><button type="button" class="source-thumbnail" ${source} data-source-image aria-label="放大 ${esc(title)}">` +
+      `<img alt="" decoding="async" hidden><span class="source-image-status" aria-hidden="true">加载缩略图</span></button>${download}</span>`;
     if (!file.preview) return `<button type="button" ${source}>下载 ${esc(title)}</button>`;
-    return `<span class="source-file-actions"><button type="button" ${source} data-preview="${esc(file.preview)}">打开 ${esc(title)}</button>` +
-      `<button type="button" ${source} aria-label="下载 ${esc(file.name)}">下载</button></span>`;
+    return `<span class="source-file-actions"><button type="button" ${source} data-preview="${esc(file.preview)}">打开 ${esc(title)}</button>${download}</span>`;
   }).join('');
 }
 
@@ -87,12 +89,71 @@ async function openSourcePreview(button) {
 
 $('#source-preview-dialog').addEventListener('close', () => { $('#source-preview-frame').removeAttribute('src'); });
 
-async function downloadSourceFile(button) {
+async function sourceFileResponse(button) {
   const response = await fetch(sourceFileUrl(button), {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!response.ok) throw new Error((await response.json()).error || '来源文件下载失败');
-  const url = URL.createObjectURL(await response.blob());
+  if (!response.ok) throw new Error((await response.json()).error || '来源文件读取失败');
+  return response.blob();
+}
+
+const imageUrls = new Map();
+function sourceImageUrl(button) {
+  const path = sourceFileUrl(button);
+  if (!imageUrls.has(path)) {
+    const pending = sourceFileResponse(button).then((blob) => URL.createObjectURL(blob));
+    imageUrls.set(path, pending);
+    pending.catch(() => { if (imageUrls.get(path) === pending) imageUrls.delete(path); });
+  }
+  return imageUrls.get(path);
+}
+
+async function showSourceThumbnail(button) {
+  const image = button.querySelector('img');
+  const status = button.querySelector('.source-image-status');
+  try {
+    image.src = await sourceImageUrl(button);
+    await image.decode();
+    image.hidden = false;
+    status.hidden = true;
+  } catch {
+    status.textContent = '缩略图无法显示';
+  }
+}
+
+const imageObserver = new IntersectionObserver((entries) => {
+  for (const { target, isIntersecting } of entries) {
+    if (!isIntersecting) continue;
+    imageObserver.unobserve(target);
+    void showSourceThumbnail(target);
+  }
+}, { root: $('#conversation-scroll'), rootMargin: '160px' });
+
+function syncSourceThumbnails() {
+  imageObserver.disconnect();
+  const buttons = [...$('#messages').querySelectorAll('[data-source-image]')];
+  const visible = new Set(buttons.map(sourceFileUrl));
+  for (const [path, pending] of imageUrls) {
+    if (visible.has(path)) continue;
+    imageUrls.delete(path);
+    void pending.then((url) => URL.revokeObjectURL(url), () => {});
+  }
+  for (const button of buttons) imageObserver.observe(button);
+}
+
+const imageDialog = $('#source-image-dialog');
+const previewImage = $('#source-image-full');
+async function openSourceImage(button) {
+  previewImage.src = await sourceImageUrl(button);
+  await previewImage.decode();
+  $('#source-image-title').textContent = button.dataset.sourceName;
+  previewImage.alt = button.dataset.sourceName;
+  if (!imageDialog.open) imageDialog.showModal();
+}
+imageDialog.addEventListener('close', () => previewImage.removeAttribute('src'));
+
+async function downloadSourceFile(button) {
+  const url = URL.createObjectURL(await sourceFileResponse(button));
   const link = document.createElement('a');
   link.href = url;
   link.download = button.dataset.sourceName;
@@ -164,6 +225,7 @@ function render() {
     const hadMessages = Boolean($('#messages').children.length);
     $('#welcome').hidden = showingSource || messages.length > 0;
     $('#messages').innerHTML = messages.map(renderMessage).join('');
+    syncSourceThumbnails();
     const active = state.tasks.find((task) => task.id === state.runtime.taskId);
     $('#live-message').innerHTML = !showingSource && working ? `<article class="message agent-message"><span class="avatar codex-avatar" aria-hidden="true">✳</span><div class="message-body"><div class="message-meta"><span class="message-name">Codex</span><span class="message-tag">${active?.mode === 'execute' ? '正在实现' : '一起分析'}</span></div><div class="message-content">${state.runtime.text ? rich(state.runtime.text) : '<span class="thinking" aria-label="正在思考"><i></i><i></i><i></i></span>'}</div><div class="message-context">${esc(active?.progress.at(-1)?.text.split('\n')[0] || `正在结合 ${active?.contextCount || 0} 条新讨论`)}</div></div></article>` : '';
     if (nearBottom || !hadMessages) requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
@@ -263,7 +325,8 @@ document.addEventListener('click', async (event) => {
     if (button.dataset.sourceMessage) {
       button.disabled = true;
       try {
-        if (button.dataset.preview) await openSourcePreview(button);
+        if (button.hasAttribute('data-source-image')) await openSourceImage(button);
+        else if (button.dataset.preview) await openSourcePreview(button);
         else await downloadSourceFile(button);
       } finally { button.disabled = false; }
     }
