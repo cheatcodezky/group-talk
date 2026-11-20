@@ -1,6 +1,6 @@
 const labels = { queued: '等待中', running: '正在回答', failed: '未完成', cancelled: '已停止' };
 
-export function setupSideChat({ $, api, toast, esc, rich, newMessageId }) {
+export function setupSideChat({ $, api, toast, esc, rich, newMessageId, onVisibilityChange }) {
   const panel = $('#side-panel');
   const toggle = $('#show-side-chat');
   const log = $('#side-messages');
@@ -18,6 +18,7 @@ export function setupSideChat({ $, api, toast, esc, rich, newMessageId }) {
     $('#context-panel').hidden = true;
     $('#app').classList.add('side-open');
     toggle.setAttribute('aria-expanded', 'true');
+    onVisibilityChange(true);
     render();
   }
 
@@ -26,6 +27,7 @@ export function setupSideChat({ $, api, toast, esc, rich, newMessageId }) {
     $('#context-panel').hidden = false;
     $('#app').classList.remove('side-open');
     toggle.setAttribute('aria-expanded', 'false');
+    onVisibilityChange(false);
   }
 
   function start(anchor) {

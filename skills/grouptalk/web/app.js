@@ -28,7 +28,41 @@ function rich(text) {
 const memberColor = (id) => Math.max(0, state.members.findIndex((member) => member.id === id)) % 4;
 const avatar = (id, name) => `<span class="avatar color-${memberColor(id)}" aria-hidden="true">${esc([...name][0] || '人')}</span>`;
 const statusLabels = { awaiting_approval: '待房主审批', queued: '等待中', starting: '提交中', running: '进行中', completed: '已完成', cancelled: '已停止', failed: '未完成', needs_review: '需要检查' };
-const sideChat = setupSideChat({ $, api, toast, esc, rich, newMessageId });
+const app = $('#app');
+const membersPanel = { element: $('#members-panel'), toggle: $('#toggle-members'), drawer: matchMedia('(max-width: 620px)'), collapsed: 'members-collapsed' };
+const overviewPanel = { element: $('#context-panel'), toggle: $('#show-notes'), drawer: matchMedia('(max-width: 920px)'), collapsed: 'overview-collapsed' };
+const panels = [membersPanel, overviewPanel];
+
+function panelIsOpen({ element, drawer, collapsed }) {
+  return !element.hidden && (drawer.matches ? element.classList.contains('open') : !app.classList.contains(collapsed));
+}
+
+function updatePanelButtons() {
+  for (const panel of panels) panel.toggle.setAttribute('aria-expanded', String(panelIsOpen(panel)));
+}
+
+function setPanelOpen(panel, open) {
+  if (panel.drawer.matches) panel.element.classList.toggle('open', open);
+  else {
+    app.classList.toggle(panel.collapsed, !open);
+    sessionStorage.setItem(`grouptalk-${panel.collapsed}`, String(!open));
+  }
+  updatePanelButtons();
+}
+
+for (const panel of panels) {
+  app.classList.toggle(panel.collapsed, sessionStorage.getItem(`grouptalk-${panel.collapsed}`) === 'true');
+  panel.drawer.addEventListener('change', () => {
+    panel.element.classList.remove('open');
+    updatePanelButtons();
+  });
+}
+updatePanelButtons();
+
+const sideChat = setupSideChat({ $, api, toast, esc, rich, newMessageId, onVisibilityChange(open) {
+  if (open) for (const panel of panels) panel.element.classList.remove('open');
+  updatePanelButtons();
+} });
 
 function sourceFileAttributes(messageId, file) {
   return `data-source-message="${esc(messageId)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
@@ -367,7 +401,7 @@ document.addEventListener('click', async (event) => {
       const found = state.messages.find(({ id }) => id === button.dataset.overviewMessage);
       if (found) {
         conversationView = found.history ? 'source' : 'room';
-        $('#context-panel').classList.remove('open');
+        if (overviewPanel.drawer.matches) setPanelOpen(overviewPanel, false);
         render();
         requestAnimationFrame(() => document.getElementById(`message-${found.id}`)?.scrollIntoView({ block: 'center' }));
       }
@@ -398,11 +432,24 @@ document.addEventListener('click', async (event) => {
 });
 $('#example-button').onclick = () => { $('#message-input').value = '我们先对齐一下：这个需求最想解决什么问题？'; updateComposer(); $('#message-input').focus(); };
 $('#add-note').onclick = () => { $('#note-text').value = ''; modal('#note-dialog'); };
-$('#show-notes').onclick = () => {
-  sideChat.close();
-  $('#context-panel').classList.add('open');
+membersPanel.toggle.onclick = () => {
+  const open = !panelIsOpen(membersPanel);
+  if (open && membersPanel.drawer.matches) {
+    sideChat.close();
+    setPanelOpen(overviewPanel, false);
+  }
+  setPanelOpen(membersPanel, open);
 };
-$('#close-notes').onclick = () => $('#context-panel').classList.remove('open');
+overviewPanel.toggle.onclick = () => {
+  const open = !panelIsOpen(overviewPanel);
+  if (open) {
+    sideChat.close();
+    if (membersPanel.drawer.matches) setPanelOpen(membersPanel, false);
+  }
+  setPanelOpen(overviewPanel, open);
+};
+$('#close-members').onclick = () => { setPanelOpen(membersPanel, false); membersPanel.toggle.focus(); };
+$('#close-notes').onclick = () => { setPanelOpen(overviewPanel, false); overviewPanel.toggle.focus(); };
 $('#show-approvals').onclick = () => modal('#approval-dialog');
 $('#settings-button').onclick = () => { $('#setting-title').value = state.title; $('#setting-topic').value = state.topic; $('#setting-execution').checked = state.settings.allowExecution; modal('#settings-dialog'); };
 $('#stop-service').onclick = () => modal('#stop-dialog');
