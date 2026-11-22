@@ -30,6 +30,7 @@ export class Store {
       }
     }
     this.state.sideChats ??= [];
+    this.state.coreItems ??= [];
     for (const chat of this.state.sideChats) {
       for (const question of chat.questions) {
         if (!['queued', 'running'].includes(question.status)) continue;

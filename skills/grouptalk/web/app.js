@@ -90,7 +90,7 @@ function overviewFile(file) {
 
 let overviewSignature = '';
 function renderOverview() {
-  const { title, goal, points, files, messageId, task } = state.overview || { points: [], files: [] };
+  const { title, goal, points, files, messageId, task, coreItems = [] } = state.overview || { points: [], files: [] };
   const signature = JSON.stringify(state.overview ?? null);
   if (signature === overviewSignature) return;
   overviewSignature = signature;
@@ -102,6 +102,13 @@ function renderOverview() {
   if (documentFile && !primary.some((file) => file.preview)) primary[0] = documentFile;
   const more = files.filter((file) => !primary.includes(file));
   $('#room-overview-body').innerHTML = `
+    ${coreItems.length ? `<section class="core-info" aria-label="核心信息"><h3>核心信息</h3>${coreItems.map((item) => `
+      <article class="core-info-card" data-core-id="${esc(item.id)}">
+        <div class="core-info-kind">${esc({ conclusion: '结论', proposal: '建议', question: '待确认', action: '行动项', progress: '进展', artifact: '素材' }[item.kind])}</div>
+        <h4>${esc(item.title)}</h4><div class="message-content">${rich(item.content)}</div>
+        <div class="core-info-meta">${time(item.updatedAt)} · 第 ${item.revision} 版 · ${esc(item.requestedBy)} 请求</div>
+        <button type="button" class="overview-jump" data-overview-message="${esc(item.messageId)}">查看来源</button>
+      </article>`).join('')}</section>` : ''}
     ${title ? `<p class="overview-subject">${esc(title)}</p>` : ''}
     ${goal ? `<p class="overview-goal">${esc(goal)}</p>` : ''}
     ${task ? `<p class="overview-current"><strong>${esc(statusLabels[task.status])}</strong> ${esc(task.request)}</p>` : ''}
@@ -136,7 +143,8 @@ function renderMessage(message) {
       </div>
       ${quote ? `<div class="quote">${esc(quote.authorName)}：${esc(quote.text.slice(0, 180))}</div>` : ''}
       ${shared}
-      <div class="message-content">${rich(message.text)}</div>
+      <div class="message-content">${rich(message.coreUpdate ? message.text.replace(message.coreUpdate.raw, '') : message.text)}</div>
+      ${message.coreUpdate ? '<div class="message-context">已更新右侧核心信息</div>' : ''}
       ${files.length ? `<div class="source-files" aria-label="对话产物">${sourceFileActions(message, files)}</div>` : ''}
       ${task && isAgent ? `<div class="message-context"><span>◌</span> 已结合 ${task.contextCount || 0} 条新讨论${task.status === 'cancelled' ? ' · 本回合已停止' : ''}</div>` : ''}
       <div class="message-actions">

@@ -81,7 +81,7 @@ export function roomOverview(state, sourceFiles) {
   const currentTask = state.tasks.findLast(({ status }) => status === 'running' || status === 'starting') ||
     state.tasks.find(({ status }) => status === 'awaiting_approval' || status === 'queued');
   return {
-    title: shorten(recap?.title || '', 66), goal: shorten(goal || '', 116), points, files,
+    title: shorten(recap?.title || '', 66), goal: shorten(goal || '', 116), points, files, coreItems: state.coreItems || [],
     messageId: recap?.message.id,
     task: currentTask && { status: currentTask.status, request: shorten(plain(currentTask.request), 76) },
   };

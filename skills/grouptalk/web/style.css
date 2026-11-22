@@ -118,6 +118,13 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .danger-button:hover { background: #faecec; }
 .danger-primary { background: #a4353d; }
 .danger-primary:hover { background: #8d2931; }
+.core-info { margin-bottom: 14px; }
+.core-info > h3 { margin: 0 0 8px; font-size: 14px; }
+.core-info-card { border: 1px solid #e5ddf0; border-radius: 8px; padding: 10px; margin-bottom: 8px; background: #fbf9ff; }
+.core-info-kind { font-size: 11px; color: #6b568c; }
+.core-info-card h4 { margin: 5px 0; font-size: 13px; overflow-wrap: anywhere; }
+.core-info-card .message-content { font-size: 12px; }
+.core-info-meta { margin: 7px 0 4px; color: #736a7e; font-size: 10px; overflow-wrap: anywhere; }
 
 .app {
   --members-width: 200px;
