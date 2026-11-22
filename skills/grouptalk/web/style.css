@@ -109,7 +109,11 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 #source-preview-dialog .dialog-heading { margin: 0; padding: 8px 16px; border-bottom: 1px solid #e4e5de; }
 #source-preview-title { overflow-wrap: anywhere; }
 #source-preview-frame { display: block; width: 100%; height: 78vh; height: 78dvh; border: 0; background: white; }
-#stop-service { margin-right: auto; }
+#stop-service { font-size: 11px; white-space: nowrap; border: 1px solid #e6c6c8; background: #fff; padding: 7px 9px; }
+@media (max-width: 620px) {
+  .room-header { height: auto; min-height: 83px; flex-wrap: wrap; }
+  .header-actions { flex-wrap: wrap; }
+}
 .danger-button { color: #a4353d; }
 .danger-button:hover { background: #faecec; }
 .danger-primary { background: #a4353d; }

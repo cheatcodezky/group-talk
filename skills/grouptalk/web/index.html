@@ -38,6 +38,7 @@
           <button class="share-button side-toggle" id="show-side-chat" aria-controls="side-panel" aria-expanded="false">侧聊</button>
           <button class="icon-button" id="settings-button" title="房间设置" aria-label="房间设置">⚙</button>
           <button class="share-button" id="share-button"><span aria-hidden="true">↗</span> 邀请同伴</button>
+          <button class="share-button danger-button" id="stop-service" type="button" hidden>停止服务</button>
         </div>
       </header>
       <div id="connection-banner" class="connection-banner" hidden role="status"></div>
@@ -111,7 +112,7 @@
     <p>此处的决定只对本次请求生效。请核对操作内容和影响。</p>
     <div id="approval-list"></div>
   </dialog>
-  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>房间设置</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div><label for="setting-title">房间名称</label><input id="setting-title" maxlength="60" required><label for="setting-topic">共同讨论的目标</label><textarea id="setting-topic" rows="3" maxlength="500" required></textarea><label class="checkbox-row"><input id="setting-execution" type="checkbox"><span>允许成员请求 Codex 执行任务<small>每项请求须经本机房主确认后开始。</small></span></label><p class="muted small">实现任务使用受限的工作区权限。Codex 需要额外权限时，会单独请求审批。</p><div class="dialog-actions"><button id="stop-service" type="button" class="text-button danger-button" hidden>停止服务</button><button type="button" class="text-button" data-close>取消</button><button type="submit" class="primary">保存设置</button></div></form></dialog>
+  <dialog id="settings-dialog"><form id="settings-form"><div class="dialog-heading"><h2>房间设置</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div><label for="setting-title">房间名称</label><input id="setting-title" maxlength="60" required><label for="setting-topic">共同讨论的目标</label><textarea id="setting-topic" rows="3" maxlength="500" required></textarea><label class="checkbox-row"><input id="setting-execution" type="checkbox"><span>允许成员请求 Codex 执行任务<small>每项请求须经本机房主确认后开始。</small></span></label><p class="muted small">实现任务使用受限的工作区权限。Codex 需要额外权限时，会单独请求审批。</p><div class="dialog-actions"><button type="button" class="text-button" data-close>取消</button><button type="submit" class="primary">保存设置</button></div></form></dialog>
   <dialog id="stop-dialog" aria-labelledby="stop-title">
     <div class="dialog-heading"><h2 id="stop-title">停止 GroupTalk 服务</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div>
     <p>所有成员会断开连接，正在运行的任务会中断。房间和聊天记录会保存，重新开房后可以继续。</p>
