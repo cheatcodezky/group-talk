@@ -29,4 +29,6 @@ Members first see the source conversation's shared messages and Codex replies. T
 
 Members can ask `@Codex 请把当前核心结论、待确认项和素材更新到右侧核心信息`. The room prompt explains the `grouptalk-core` JSON format. Updates replace items by stable id and retain omitted items. Explicit removals use `remove`. Successful main-room replies publish these items to everyone's overview with a link to the source message. Side Chat and automatic participation keep their existing discussion behavior.
 
+A mention of `@Codex` anywhere in a chat message directly queues that message for Codex. This works with Jev enabled or disabled. With Jev enabled, ordinary unmentioned chat is evaluated for whether Codex should join the discussion automatically. With Jev disabled or unavailable, ordinary chat stays silent.
+
 GroupTalk runs Codex under Ask for approval. The owner uses the locally opened room to review member execution requests and any additional permissions Codex requests during implementation. A decision applies to the current request. Leave decisions to the host using the GroupTalk approval dialog.

@@ -147,14 +147,14 @@ export class Room extends EventEmitter {
       return { message: previous, task: this.state.tasks.find((t) => t.messageId === previous.id), duplicate: true };
     }
     check(['chat', 'ask', 'execute'].includes(input.mode || 'chat'), 400, '消息类型不正确');
-    const mode = input.mode === 'execute' ? 'execute' : input.mode === 'ask' || /^@codex(?:\s|[，,:：]|$)/i.test(text) ? 'ask' : 'chat';
+    const mode = input.mode === 'execute' ? 'execute' : input.mode === 'ask' || /@codex(?![a-z0-9_])/i.test(text) ? 'ask' : 'chat';
     if (mode === 'execute') check(this.canExecute(member), 403, '执行任务需要房主开启协作者执行权限');
     if (input.replyTo) check(this.state.messages.some((m) => m.id === input.replyTo), 400, '引用的消息不存在');
     const message = this.store.addMessage({ role: 'user', authorId: member.id, authorName: member.name, text, mode, clientId, replyTo: input.replyTo || null });
     let task;
     if (mode !== 'chat') {
       this.invalidateJudge();
-      task = this.enqueue({ trigger: 'mention', author: member, message, mode, request: text.replace(/^@codex[\s，,:：]*/i, '') || '请结合当前讨论给出帮助。' });
+      task = this.enqueue({ trigger: 'mention', author: member, message, mode, request: text.replace(/^@codex(?![a-z0-9_])[\s，,:：]*/i, '') || '请结合当前讨论给出帮助。' });
     }
     this.commit();
     if (task) queueMicrotask(() => void this.pump());
@@ -291,7 +291,10 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
         }
         if (!this.closed) { this.runtime = { state: this.agent.disconnected ? 'disconnected' : 'idle', taskId: null, text: '', progress: [], error: this.agent.disconnected ? 'Codex 已断开，请重启服务' : this.runtime.error || '' }; this.commit(); }
       }
-    } finally { this.pumping = false; }
+    } finally {
+      this.pumping = false;
+      if (this.state.messages.some((message) => message.role === 'user' && !message.history && message.seq > this.state.deliveredSeq)) this.scheduleJudge();
+    }
   }
   async cancel(member, taskId) {
     const task = this.state.tasks.find((t) => t.id === taskId);
@@ -374,7 +377,7 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
     if (Date.now() - this.state.judge.lastSpokeAt < this.cooldownMs) return;
     const latest = this.state.messages.filter((m) => m.role === 'user' && !m.history).slice(-12);
     const cutoff = latest.at(-1)?.seq || 0;
-    if (cutoff <= this.state.judge.lastSeq) return;
+    if (cutoff <= Math.max(this.state.judge.lastSeq, this.state.deliveredSeq)) return;
     const version = this.judgeVersion;
     this.judging = true; this.judgeAbort = new AbortController();
     this.state.judge.status = 'checking'; this.commit();

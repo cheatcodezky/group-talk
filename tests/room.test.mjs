@@ -23,18 +23,47 @@ test('多人自由讨论不会调用 Agent，点名会包含所有人的未提�
   assert.equal(f.store.state.usage.inputTokens, 100);
 });
 
-test('引用与代码中的点名不触发；显式开头点名直接触发；重发去重', async (t) => {
+test('聊天任意位置点名均触发，保留整句上下文且重发去重', async (t) => {
   const f = await fixture(); t.after(f.close);
-  f.room.post(f.alice, message('他说“@Codex 帮我看看”，这只是引用。'));
-  f.room.post(f.bob, message('```\n@Codex 不要执行\n```'));
+  f.room.post(f.alice, message('这是 @CodexHelper 的名字。'));
   assert.equal(f.store.state.tasks.length, 0);
-  const input = message('@Codex 请比较刚才的意见。');
+  const text = '这两个方案，请 @Codex帮我们比较一下。';
+  const input = message(text);
   const first = f.room.post(f.alice, input);
   const duplicate = f.room.post(f.alice, input);
   assert.equal(duplicate.message.id, first.message.id);
   assert.equal(duplicate.task.id, first.task.id);
   await until(() => first.task.status === 'completed');
   assert.equal(f.agent.calls.length, 1);
+  const prompt = JSON.parse(f.agent.calls[0].prompt.slice(f.agent.calls[0].prompt.indexOf('{')));
+  assert.equal(prompt.currentRequest.text, text);
+  for (const text of ['请比较一下，@Codex', '@CODEX，请提供建议。', '他说“@Codex 帮我看看”。', '```\n@Codex 不要执行\n```']) {
+    const task = f.room.post(f.bob, message(text)).task;
+    assert.equal(task.trigger, 'mention');
+    assert.equal(task.mode, 'ask');
+    await until(() => task.status === 'completed');
+  }
+});
+
+test('执行期间的新普通聊天会在空闲后交给 Jev，已交给 Codex 的点名不会重复裁决', async (t) => {
+  let judged = 0;
+  const f = await fixture({ agent: new FakeAgent({ duration: 50 }), judge: {
+    ready: true, evaluate: async () => { judged++; return { gap: 0, clarify: 0, tokens: 100 }; },
+  } });
+  t.after(f.close);
+  f.room.configure(f.owner, { jevEnabled: true });
+  const task = f.room.post(f.alice, message('请 @Codex 先分析当前方案。')).task;
+  await until(() => task.status === 'running');
+  await delay(15);
+  assert.equal(judged, 0);
+  f.room.post(f.bob, message('我们还有一个新的信息缺口需要补充讨论。'));
+  await until(() => task.status === 'completed');
+  await until(() => judged === 1);
+  const next = f.room.post(f.alice, message('补充一下，@Codex 请继续。')).task;
+  await until(() => next.status === 'completed');
+  await delay(40);
+  assert.equal(judged, 1);
+  assert.equal(f.agent.calls.length, 2);
 });
 
 test('并发调用串行执行，执行期间新聊天留到下一批，不重复提交旧观点', async (t) => {
