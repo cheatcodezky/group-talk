@@ -5,6 +5,13 @@ import { check, shortText } from './validation.mjs';
 const REVIEW_DURATION = 30 * 60 * 1000;
 const MAX_COMMENTS = 3;
 
+function reviewerLabel(value, name) {
+  if (value === undefined) return null;
+  const label = shortText(value, 80, name);
+  check(!/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(label), 400, `${name}须在同一行`);
+  return `${name} ${label}`;
+}
+
 export function createReviews(room) {
   const grants = new Map();
   function list() {
@@ -35,8 +42,10 @@ export function createReviews(room) {
       return { ...grant.packet, expiresAt: grant.expiresAt, remainingComments: MAX_COMMENTS - grant.comments.size };
     },
     comment(token, ip, input) {
-      const text = shortText(input.text, 6000, '评审意见');
+      const opinion = shortText(input.text, 6000, '评审意见');
       const requestId = shortText(input.requestId, 100, '请求标识');
+      const source = ['AI 输出', reviewerLabel(input.agent, 'Agent'), reviewerLabel(input.model, '模型')];
+      const text = `（${source.filter(Boolean).join(' · ')}）\n\n${opinion}`;
       const grant = grantFor(token, ip);
       const existing = grant.comments.get(requestId);
       if (existing) {

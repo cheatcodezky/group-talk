@@ -42,7 +42,9 @@ $grouptalk 把当前对话开成局域网群聊。
 
 ![房主为成员 IP 设置用户名备注](docs/images/rename-member.png)
 
-![同一个 IP 上提交的浏览器消息与 Agent 评审意见共用用户名](docs/images/agent-review-feedback.png)
+评审回帖会在正文开头显示「（AI 输出）」。Agent 可以附上自己提供的 Agent 名称和当前模型，例如「（AI 输出 · Agent Codex · 模型 gpt-5.4）」。房间仍以成员用户名署名。
+
+![同一个 IP 的浏览器消息和 Agent 回帖共用用户名，AI 回帖在正文开头注明来源](docs/images/agent-review-feedback.png)
 
 ### 让 AI 发布核心信息
 

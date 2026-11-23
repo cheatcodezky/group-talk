@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { parseArgs } from 'node:util';
 
 async function run() {
-  const [argument, action, file] = process.argv.slice(2);
+  const { values, positionals } = parseArgs({
+    options: { comment: { type: 'boolean' }, agent: { type: 'string' }, model: { type: 'string' } },
+    allowPositionals: true,
+  });
+  const [argument, file] = positionals;
   const link = new URL(argument || process.env.GROUPTALK_REVIEW_LINK);
   const local = ['127.0.0.1', '[::1]', 'localhost'].includes(link.hostname);
   const ticket = new URLSearchParams(link.hash.slice(1)).get('review');
@@ -10,10 +15,12 @@ async function run() {
       link.username || link.password || link.pathname !== '/' || link.search || !/^[A-Za-z0-9_-]{32}$/.test(ticket || '')) {
     throw new Error('请提供 GroupTalk 专用评审链接。局域网地址须使用 HTTPS。');
   }
-  if (action && action !== '--comment') throw new Error('未知操作。使用 --comment 从标准输入提交评审意见。');
+  if (positionals.length > 2 || (!values.comment && (file !== undefined || values.agent !== undefined || values.model !== undefined))) {
+    throw new Error('用法：<评审链接> [--comment [文本文件] [--agent 名称] [--model 模型]]。');
+  }
   const headers = { authorization: `Bearer ${ticket}` };
   let body;
-  if (action === '--comment') {
+  if (values.comment) {
     const input = file ? createReadStream(file, { encoding: 'utf8' }) : process.stdin.setEncoding('utf8');
     let text = '';
     for await (const chunk of input) {
@@ -21,7 +28,7 @@ async function run() {
       if (text.length > 6000) throw new Error('评审意见最多 6000 字符。');
     }
     if (!text.trim()) throw new Error('请从标准输入提供评审意见。');
-    body = JSON.stringify({ text, requestId: randomUUID() });
+    body = JSON.stringify({ text, requestId: randomUUID(), agent: values.agent, model: values.model });
     headers['content-type'] = 'application/json';
   }
   const response = await fetch(new URL('/api/review', link.origin), {
