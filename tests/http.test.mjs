@@ -147,7 +147,7 @@ test('只有本机房主能停止服务，收到成功响应后向成员发送�
   await assert.rejects(fetch(base + '/api/health'));
 });
 
-test('留空时分配房主与成员昵称，连接地址只给房主并以实际连接为准', async (t) => {
+test('同一 IP 沿用成员及房主备注，凭证角色独立，连接地址只给房主', async (t) => {
   const f = await fixture();
   const mac = '02:11:22:33:44:55';
   const web = await serve({ room: f.room, host: '127.0.0.1', port: 0, lookupMac: async () => mac });
@@ -161,16 +161,66 @@ test('留空时分配房主与成员昵称，连接地址只给房主并以实�
   };
   const owner = await join(f.store.state.hostKey, '');
   const secondOwner = await join(f.store.state.hostKey);
-  const member = await join(f.store.state.invite, '  ');
+  const member = await join(f.store.state.invite, '这次换名');
   assert.equal(owner.member.name, '房主');
   assert.equal(owner.member.role, 'host');
-  assert.equal(secondOwner.member.name, '房主 · 2');
-  assert.match(member.member.name, /^[\p{Script=Han}]+ \d{4}$/u);
+  assert.equal(secondOwner.member.name, '房主');
+  assert.equal(member.member.id, owner.member.id);
+  assert.equal(secondOwner.member.id, owner.member.id);
+  assert.equal(member.member.role, 'member');
   assert.ok(!('network' in member.member));
   const snapshot = async (token) => (await fetch(base + '/api/bootstrap', { headers: { authorization: `Bearer ${token}` } })).json();
   assert.deepEqual((await snapshot(owner.token)).members.find(({ id }) => id === member.member.id).network, { ip: '127.0.0.1', mac });
   assert.ok((await snapshot(member.token)).members.every((entry) => !('network' in entry)));
+  const rename = (token, name) => fetch(`${base}/api/members/${member.member.id}/name`, { method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+  assert.equal((await rename(member.token, '未经批准的备注')).status, 403);
+  assert.equal((await rename(owner.token, '评审负责人')).status, 200);
+  assert.equal((await snapshot(member.token)).me.name, '评审负责人');
+  assert.deepEqual((await join(f.store.state.invite)).member.name, '评审负责人');
+  assert.throws(() => f.room.authenticate(member.token, '192.0.2.10'), /连接地址已变化/);
+  const elsewhere = f.room.join({ key: f.store.state.invite }, { ip: '192.0.2.10' });
+  assert.notEqual(elsewhere.member.id, member.member.id);
+  assert.match(elsewhere.member.name, /^[\p{Script=Han}]+ \d{4}$/u);
   assert.ok(f.store.state.members.every((entry) => !('network' in entry)));
+});
+
+test('评审链接仅返回批准材料，发言沿用连接 IP 且无法触发 Codex 或取得房间权限', async (t) => {
+  const f = await fixture();
+  f.store.addMessage({ role: 'user', authorId: 'private', authorName: '未分享来源', text: '未批准的内部记录', history: true });
+  const web = await serve({ room: f.room, host: '0.0.0.0', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const call = (path, token, data, origin = base) => fetch(origin + path, {
+    method: data === undefined ? 'GET' : 'POST',
+    headers: { authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'content-type': 'application/json' }) },
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+  const joined = await fetch(base + '/api/join', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: f.store.state.invite, name: '评审者' }) }).then((result) => result.json());
+  const issue = { context: '这是房主批准的技术方案 v2' };
+  assert.equal((await call('/api/review-links', joined.token, issue)).status, 403);
+  const { id, token } = await (await call('/api/review-links', f.tokens.owner, issue)).json();
+  const packet = await (await call('/api/review', token)).json();
+  assert.equal(packet.context, issue.context);
+  assert.doesNotMatch(JSON.stringify(packet), /未批准的内部记录|threadId|workspace/);
+  assert.equal((await call('/api/bootstrap', token)).status, 401);
+  assert.equal((await call('/api/review', joined.token)).status, 403);
+  const lan = Object.values(networkInterfaces()).flat().find((entry) => entry?.family === 'IPv4' && !entry.internal);
+  if (lan) assert.equal((await call('/api/review', token, undefined, `http://${lan.address}:${web.port}`)).status, 403);
+  const post = (requestId) => call('/api/review', token, { text: '@Codex 这是评审文本', requestId });
+  const first = await (await post('first')).json();
+  assert.deepEqual(await (await post('first')).json(), first);
+  const written = f.store.state.messages.find((entry) => entry.id === first.id);
+  assert.equal(written.authorId, joined.member.id);
+  assert.equal(written.authorName, '评审者');
+  assert.equal(f.store.state.tasks.length, 0);
+  assert.equal((await post('second')).status, 201);
+  assert.equal((await post('third')).status, 201);
+  assert.equal((await post('fourth')).status, 429);
+  assert.equal((await call(`/api/review-links/${id}/revoke`, f.tokens.owner, {})).status, 200);
+  assert.equal((await call('/api/review', token)).status, 403);
+  assert.equal((await post('first')).status, 403);
 });
 
 test('识别 IPv4 映射地址及各平台邻居记录，仅返回对应 IP 的单一 MAC', () => {

@@ -64,19 +64,34 @@ export class Room extends EventEmitter {
     }
   }
   commit() { this.store.save(); this.emit('change'); }
-  authenticate(token) {
-    const member = typeof token === 'string' && this.state.members.find((m) => m.tokenHash === digest(token));
-    check(member, 401, '身份已失效，请通过邀请链接重新加入');
-    return member;
+  authenticate(token, ip) {
+    const hash = typeof token === 'string' ? digest(token) : null;
+    if (hash) for (const member of this.state.members) {
+      const role = member.tokenHash === hash ? (member.originalRole || member.role) :
+        member.sessions?.find((session) => session.tokenHash === hash)?.role;
+      if (!role) continue;
+      check(!member.ip || !ip || member.ip === ip, 401, '连接地址已变化，请重新加入');
+      return { ...member, role };
+    }
+    check(false, 401, '身份已失效，请通过邀请链接重新加入');
   }
-  join({ key, name }, { local = false } = {}) {
+  join({ key, name }, { local = false, ip } = {}) {
     check(typeof key === 'string' && (digest(key) === digest(this.state.invite) || digest(key) === digest(this.state.hostKey)), 401, '邀请链接不正确或已撤销');
     const host = digest(key) === digest(this.state.hostKey);
     check(!host || local, 403, '房主入口仅可在开房电脑上使用');
+    const role = host ? 'host' : 'member';
+    const token = secret();
+    const remembered = ip && this.state.members.find((member) => member.ip === ip);
+    if (remembered) {
+      remembered.originalRole ??= remembered.role;
+      (remembered.sessions ??= []).push({ tokenHash: digest(token), role });
+      if (host) remembered.role = 'host';
+      this.commit();
+      return { token, member: this.publicMember({ ...remembered, role }), roomId: this.state.id };
+    }
     name = (name === undefined || (typeof name === 'string' && !name.trim())) ? this.defaultNickname(host) : shortText(name, 24, '昵称');
     check(!this.state.members.some((m) => m.name === name), 409, '这个昵称已被使用，请换一个名字');
-    const token = secret();
-    const member = { id: randomUUID(), name, role: host ? 'host' : 'member', tokenHash: digest(token), joinedAt: Date.now() };
+    const member = { id: randomUUID(), name, role, ...(ip && { ip }), tokenHash: digest(token), joinedAt: Date.now() };
     this.state.members.push(member);
     this.commit();
     return { token, member: this.publicMember(member), roomId: this.state.id };
@@ -102,14 +117,25 @@ export class Room extends EventEmitter {
     this.emit('change');
   }
   publicMember(member) { return { id: member.id, name: member.name, role: member.role, online: (this.connections.get(member.id) || 0) > 0 }; }
+  renameMember(host, memberId, input) {
+    check(host.role === 'host', 403, '仅房主可以修改成员备注');
+    const member = this.state.members.find((entry) => entry.id === memberId);
+    check(member, 404, '找不到此成员');
+    const name = shortText(input.name, 24, '用户名');
+    check(!this.state.members.some((entry) => entry.id !== memberId && entry.name === name), 409, '这个用户名已被使用');
+    member.name = name;
+    this.commit();
+    return this.publicMember(member);
+  }
   snapshot(member) {
     const executionRequests = this.state.tasks.filter((task) => task.status === 'awaiting_approval');
+    const me = this.state.members.find((entry) => entry.id === member.id);
     return {
       id: this.state.id, title: this.state.title, topic: this.state.topic,
-      me: this.publicMember(member), members: this.state.members.map((m) => {
+      me: this.publicMember({ ...member, name: me?.name || member.name }), members: this.state.members.map((m) => {
         const entry = this.publicMember(m);
         const info = member.role === 'host' && this.memberNetworks.get(m.id);
-        if (info) entry.network = { ip: info.ip, mac: info.mac };
+        if (info || (member.role === 'host' && m.ip)) entry.network = { ip: info?.ip || m.ip, mac: info?.mac || null };
         return entry;
       }),
       messages: this.state.messages, tasks: this.state.tasks, notes: this.state.decisions, coreItems: this.state.coreItems || [],
@@ -161,9 +187,19 @@ export class Room extends EventEmitter {
     else this.scheduleJudge();
     return { message, task };
   }
+  postReview(ip, text) {
+    let member = this.state.members.find((entry) => entry.ip === ip);
+    if (!member) {
+      member = { id: randomUUID(), name: this.defaultNickname(false), role: 'member', ip, joinedAt: Date.now() };
+      this.state.members.push(member);
+    }
+    const message = this.store.addMessage({ role: 'user', authorId: member.id, authorName: member.name, text, mode: 'chat' });
+    this.commit();
+    return message;
+  }
   enqueue({ trigger, author, message, mode = 'ask', request }) {
     const task = {
-      id: randomUUID(), status: mode === 'execute' && author?.role !== 'host' ? 'awaiting_approval' : 'queued', trigger, mode, authorId: author?.id || 'jev', authorName: author?.name || 'Jev 自动邀请',
+      id: randomUUID(), status: mode === 'execute' && author?.role !== 'host' ? 'awaiting_approval' : 'queued', trigger, mode, authorId: author?.id || 'jev', authorRole: author?.role, authorName: author?.name || 'Jev 自动邀请',
       messageId: message?.id || null, request, createdAt: Date.now(), progress: [],
     };
     this.state.tasks.push(task);
@@ -236,10 +272,11 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
       while (!this.closed && !this.state.queuePaused && (task = this.state.tasks.find((t) => t.status === 'queued'))) {
         if (task.trigger === 'auto' && !this.state.settings.jevEnabled) { task.status = 'cancelled'; this.commit(); continue; }
         const author = this.state.members.find((member) => member.id === task.authorId);
-        if (task.mode === 'execute' && (!author || !this.canExecute(author))) {
+        const role = task.authorRole || author?.role;
+        if (task.mode === 'execute' && (!author || !this.canExecute({ role }))) {
           task.status = 'failed'; task.error = '执行权限已撤销，此任务没有运行。'; this.commit(); continue;
         }
-        if (task.mode === 'execute' && author.role !== 'host' && !task.approvedBy) {
+        if (task.mode === 'execute' && role !== 'host' && !task.approvedBy) {
           task.status = 'awaiting_approval'; this.commit(); continue;
         }
         const cutoff = this.state.seq;
@@ -299,7 +336,7 @@ ${JSON.stringify({ room: { title: this.state.title, topic: this.state.topic }, s
   async cancel(member, taskId) {
     const task = this.state.tasks.find((t) => t.id === taskId);
     check(task, 404, '任务不存在');
-    check(member.role === 'host' || task.authorId === member.id, 403, '只能停止自己发起的任务');
+    check(member.role === 'host' || (task.authorId === member.id && task.authorRole !== 'host'), 403, '只能停止自己发起的任务');
     if (['queued', 'awaiting_approval'].includes(task.status)) { task.status = 'cancelled'; this.commit(); }
     else if (task.status === 'running') { await this.agent.interrupt(); }
     else check(false, 409, '任务已结束或正在提交，请稍后刷新状态');

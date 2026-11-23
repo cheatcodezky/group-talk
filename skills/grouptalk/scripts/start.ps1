@@ -1,6 +1,10 @@
 $ErrorActionPreference = 'Stop'
 $cli = Join-Path $PSScriptRoot '../server/cli.mjs'
 $checkNode = Join-Path $PSScriptRoot 'check-node.cjs'
+if ($args.Count -gt 0 -and $args[0] -eq '--review') {
+    $cli = Join-Path $PSScriptRoot 'review.mjs'
+    $args = @($args | Select-Object -Skip 1)
+}
 
 function Test-Node($Binary) {
     if (!$Binary -or !(Test-Path -LiteralPath $Binary -PathType Leaf)) { return $false }

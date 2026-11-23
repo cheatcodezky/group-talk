@@ -17,6 +17,7 @@
       <div class="join-content"><div class="eyebrow">一个属于大家的讨论现场</div><h1>好的想法，<br>一起聊出来。</h1><p class="join-description">和同伴讨论需求，让同一个 Codex 理解每个人的观点，陪你们一起判断、完善和实现。</p>
         <form id="join-form"><label for="join-name">怎么称呼你（选填）</label><input id="join-name" name="name" placeholder="留空时分配随机昵称" maxlength="24" autocomplete="nickname"><div id="invite-input-wrap" hidden><label for="join-key">邀请口令</label><input id="join-key" placeholder="请使用房主提供的邀请链接" autocomplete="off"></div><p id="join-error" class="form-error" role="alert"></p><button class="primary join-button" type="submit">加入讨论 <span aria-hidden="true">↗</span></button></form>
         <p class="join-footnote"><span class="status-dot"></span> 同一个房间 · 共同的上下文 · 一位 AI 协作者</p>
+        <p id="review-link-hint" class="join-description" hidden>这是给 Agent 的评审链接。将它交给安装了 GroupTalk Skill 的 Agent，即可读取房主批准的材料。</p>
       </div><div class="join-bottom">从不同的想法，走向共同的下一步。</div>
     </main>
   </section>
@@ -24,7 +25,6 @@
     <aside class="sidebar" id="members-panel" aria-label="房间成员">
       <div class="sidebar-heading"><a class="brand" href="/" aria-label="GroupTalk"><img src="/favicon.svg" alt="" width="30" height="30">GroupTalk</a><button class="icon-button" id="close-members" type="button" aria-label="关闭成员栏">×</button></div>
       <div class="workspace-label">共享工作空间 <span class="local-tag">局域网</span></div>
-      <div class="nav-active"><span aria-hidden="true">◌</span> 讨论现场 <span class="tiny-dot"></span></div>
       <div class="sidebar-section"><div class="section-label">房间成员 <span id="member-count">0</span></div><div id="members"></div></div>
       <div class="sidebar-section agent-membership"><div class="section-label">AI 协作者</div><div class="member-row"><span class="avatar codex-avatar" aria-hidden="true">✳</span><div><strong>Codex</strong><small id="agent-presence">等待点名</small></div><span id="agent-dot" class="status-dot"></span></div><p>一个上下文，听见每个人。</p></div>
       <div class="sidebar-bottom"><div class="privacy-note"><span aria-hidden="true">⌘</span><div>任务在房主工作区运行<small>房间共享同一个协作会话</small></div></div><button id="identity-button" class="identity-button" type="button"></button></div>
@@ -34,10 +34,11 @@
         <div class="room-heading"><div class="room-kicker"><span class="status-dot" id="connection-dot"></span><span id="connection-label">正在连接</span><span class="header-divider">/</span><span>讨论房间</span></div><h1 id="room-title"></h1></div>
         <div class="header-actions">
           <button class="panel-toggle" id="toggle-members" type="button" aria-controls="members-panel" aria-expanded="true">成员</button>
-          <button class="panel-toggle" id="show-notes" type="button" aria-controls="context-panel" aria-expanded="true">房间速览</button>
+          <button class="panel-toggle" id="show-notes" type="button" aria-controls="context-panel" aria-expanded="true">协作记录</button>
           <button class="share-button side-toggle" id="show-side-chat" aria-controls="side-panel" aria-expanded="false">侧聊</button>
           <button class="icon-button" id="settings-button" title="房间设置" aria-label="房间设置">⚙</button>
           <button class="share-button" id="share-button"><span aria-hidden="true">↗</span> 邀请同伴</button>
+          <button class="panel-toggle" id="show-review-links" type="button" hidden>评审链接</button>
           <button class="share-button danger-button" id="stop-service" type="button" hidden>停止服务</button>
         </div>
       </header>
@@ -46,18 +47,25 @@
         <span id="approval-status" role="status"></span><button type="button" id="show-approvals" hidden>查看审批</button>
       </div>
       <section class="topic-bar" aria-label="讨论主题"><span class="topic-icon" aria-hidden="true">◎</span><p id="room-topic"></p></section>
-      <nav class="conversation-views" id="conversation-views" aria-label="对话视图" hidden>
-        <button type="button" data-conversation-view="source" aria-pressed="false">来源对话 <span id="source-count"></span></button>
-        <button type="button" data-conversation-view="room" aria-pressed="false">群聊</button>
+      <nav class="conversation-views" aria-label="房间视图">
+        <button type="button" data-conversation-view="overview" aria-controls="review-view" aria-pressed="true">评审总览</button>
+        <button type="button" data-conversation-view="room" aria-controls="conversation-scroll" aria-pressed="false">群聊</button>
+        <button type="button" data-conversation-view="source" aria-controls="conversation-scroll" aria-pressed="false" hidden>来源对话 <span id="source-count"></span></button>
       </nav>
-      <div class="conversation-scroll" id="conversation-scroll"><div id="welcome" class="welcome"><span class="welcome-symbol" aria-hidden="true">✳</span><h2>把想法放到同一个现场。</h2><p>先自由讨论，需要帮助时再邀请 Codex。<br>它会读到这段时间里所有人的观点。</p><div class="workflow"><span><b>01</b> 交流想法</span><i>→</i><span><b>02</b> @Codex</span><i>→</i><span><b>03</b> 一起推进</span></div><button id="example-button" class="example-button">试着聊聊：这个需求最想解决什么问题？ <span>↗</span></button></div><div id="messages" class="messages" aria-live="polite" aria-relevant="additions text"></div><div id="live-message"></div></div>
-      <div class="composer-area"><div id="reply-preview" class="reply-preview" hidden></div><form id="message-form" class="composer"><div class="composer-modes" role="group" aria-label="消息模式"><button type="button" class="mode-button active" data-mode="chat">自由讨论</button><button type="button" class="mode-button" data-mode="ask">✳ @Codex 一起分析</button><button type="button" class="mode-button" data-mode="execute">↗ 请 Codex 实现</button></div><label for="message-input" class="sr-only">消息内容</label><textarea id="message-input" rows="1" maxlength="6000" placeholder="分享你的想法，也可以 @Codex 邀请它参与…"></textarea><div class="composer-footer"><span id="composer-hint">消息对房间内所有人可见</span><button type="submit" id="send-button" class="send-button" disabled>发送 <span aria-hidden="true">↑</span></button></div></form><div class="context-footer"><span id="context-status">Codex 正在等待大家的讨论</span><span>Enter 发送 <span class="keyboard-separator">·</span> Shift + Enter 换行</span></div></div>
+      <section id="review-view" class="review-view" aria-labelledby="review-heading">
+        <div class="review-content">
+          <div class="review-heading"><h2 id="review-heading">会话总结</h2><button id="enter-discussion" class="primary" type="button">进入群聊</button></div>
+          <div id="review-summary" class="review-summary"></div>
+          <section id="review-core-info" class="review-section core-info" aria-labelledby="review-core-title" hidden><h3 id="review-core-title">核心信息</h3><div id="review-core-items"></div></section>
+          <section class="review-section" aria-labelledby="review-files-title"><h3 id="review-files-title">评审材料 <span id="review-files-count"></span></h3><div id="review-files"></div></section>
+        </div>
+      </section>
+      <div class="conversation-scroll" id="conversation-scroll" hidden><div id="welcome" class="welcome"><span class="welcome-symbol" aria-hidden="true">✳</span><h2>把想法放到同一个现场。</h2><p>先自由讨论，需要帮助时再邀请 Codex。<br>它会读到这段时间里所有人的观点。</p><div class="workflow"><span><b>01</b> 交流想法</span><i>→</i><span><b>02</b> @Codex</span><i>→</i><span><b>03</b> 一起推进</span></div><button id="example-button" class="example-button">试着聊聊：这个需求最想解决什么问题？ <span>↗</span></button></div><div id="messages" class="messages" aria-live="polite" aria-relevant="additions text"></div><div id="live-message"></div></div>
+      <div class="composer-area" id="composer-area" hidden><div id="reply-preview" class="reply-preview" hidden></div><form id="message-form" class="composer"><div class="composer-modes" role="group" aria-label="消息模式"><button type="button" class="mode-button active" data-mode="chat">自由讨论</button><button type="button" class="mode-button" data-mode="ask">✳ @Codex 一起分析</button><button type="button" class="mode-button" data-mode="execute">↗ 请 Codex 实现</button></div><label for="message-input" class="sr-only">消息内容</label><textarea id="message-input" rows="1" maxlength="6000" placeholder="分享你的想法，也可以 @Codex 邀请它参与…"></textarea><div class="composer-footer"><span id="composer-hint">消息对房间内所有人可见</span><button type="submit" id="send-button" class="send-button" disabled>发送 <span aria-hidden="true">↑</span></button></div></form><div class="context-footer"><span id="context-status">Codex 正在等待大家的讨论</span><span>Enter 发送 <span class="keyboard-separator">·</span> Shift + Enter 换行</span></div></div>
     </main>
     <aside class="context-panel" id="context-panel" aria-label="房间内容">
-      <section class="room-overview" aria-labelledby="room-overview-title">
-        <div class="overview-heading"><h2 id="room-overview-title">房间速览</h2><button class="icon-button mobile-notes" id="close-notes" aria-label="关闭房间速览">×</button></div>
-        <div id="room-overview-body"></div>
-      </section>
+      <div class="overview-heading"><h2>协作记录</h2><button class="icon-button mobile-notes" id="close-notes" aria-label="关闭协作记录">×</button></div>
+      <section id="sidebar-core-info" class="core-info" aria-labelledby="sidebar-core-title" hidden><h3 id="sidebar-core-title">核心信息</h3><div id="sidebar-core-items"></div></section>
       <div class="panel-header"><span>共同记录</span><span class="panel-counter" id="note-count">0</span><button class="icon-button" id="add-note" aria-label="添加共同记录" title="添加共同记录">＋</button></div>
       <div id="notes" class="notes"></div>
       <section class="task-section"><div class="section-label">协作进度 <span id="task-count"></span></div><div id="queue-warning"></div><div id="tasks"></div></section>
@@ -118,8 +126,33 @@
     <p>所有成员会断开连接，正在运行的任务会中断。房间和聊天记录会保存，重新开房后可以继续。</p>
     <div class="dialog-actions"><button type="button" class="text-button" data-close autofocus>取消</button><button id="confirm-stop-service" type="button" class="primary danger-primary">确认停止</button></div>
   </dialog>
+  <dialog id="review-links-dialog">
+    <form id="review-link-form">
+      <div class="dialog-heading"><h2>创建 Agent 评审链接</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div>
+      <p>检查并编辑下面的材料。链接绑定首次使用它的 IP，30 分钟内可阅读材料和提交最多 3 条意见。</p>
+      <label for="review-address">访问地址</label><select id="review-address"></select>
+      <p id="review-address-hint" class="muted small"></p>
+      <label for="review-context">发送给评审者的材料</label>
+      <textarea id="review-context" rows="7" maxlength="9000" required></textarea>
+      <div class="dialog-actions"><button type="submit" class="primary" id="issue-review-link">确认生成评审链接</button></div>
+    </form>
+    <div id="review-link-result" hidden>
+      <label for="review-link">新评审链接</label><input id="review-link" readonly>
+      <button type="button" id="copy-review-link" class="text-button">复制评审链接</button>
+    </div>
+    <div id="active-review-links"></div>
+  </dialog>
   <dialog id="note-dialog"><form id="note-form"><div class="dialog-heading"><h2>留下一条共同记录</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div><label for="note-kind">记录类型</label><select id="note-kind"><option value="decision">已形成的结论</option><option value="question">待确认的问题</option><option value="action">下一步行动</option></select><label for="note-text">内容</label><textarea id="note-text" rows="4" maxlength="1000" required placeholder="写下明确的内容，保留需要继续讨论的分歧。"></textarea><p class="muted small">这是一条成员记录，Codex 不会将它自动视为执行指令。</p><div class="dialog-actions"><button type="button" class="text-button" data-close>取消</button><button type="submit" class="primary">添加记录</button></div></form></dialog>
-  <dialog id="identity-dialog"><div class="dialog-heading"><h2>当前参与身份</h2><button class="icon-button" data-close aria-label="关闭">×</button></div><p id="identity-detail"></p><p class="muted">刷新页面会保留本窗口的身份。另一位同伴可以在新窗口通过邀请链接加入。</p><div class="dialog-actions"><button class="text-button" data-close>继续讨论</button><button class="primary" id="leave-button">退出此窗口</button></div></dialog>
+  <dialog id="rename-member-dialog">
+    <form id="rename-member-form">
+      <div class="dialog-heading"><h2>设置成员用户名</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div>
+      <p id="rename-member-detail"></p>
+      <label for="rename-member-name">用户名</label>
+      <input id="rename-member-name" maxlength="24" required autofocus>
+      <div class="dialog-actions"><button type="button" class="text-button" data-close>取消</button><button type="submit" id="rename-member-save" class="primary">保存</button></div>
+    </form>
+  </dialog>
+  <dialog id="identity-dialog"><div class="dialog-heading"><h2>当前参与身份</h2><button class="icon-button" data-close aria-label="关闭">×</button></div><p id="identity-detail"></p><p class="muted">同一个 IP 再次加入时会沿用房间里的用户名。</p><div class="dialog-actions"><button class="text-button" data-close>继续讨论</button><button class="primary" id="leave-button">退出此窗口</button></div></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
 </body>
 </html>

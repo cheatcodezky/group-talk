@@ -4,6 +4,10 @@ set -eu
 scripts=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 manifest="$scripts/node-release.txt"
 cli="$scripts/../server/cli.mjs"
+if [ "${1:-}" = "--review" ]; then
+  cli="$scripts/review.mjs"
+  shift
+fi
 
 usable_node() {
   "$1" --no-warnings "$scripts/check-node.cjs" >/dev/null 2>&1

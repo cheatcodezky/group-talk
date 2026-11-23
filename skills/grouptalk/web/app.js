@@ -6,11 +6,18 @@ const time = (stamp) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minu
 // randomUUID requires HTTPS on LAN hosts; getRandomValues also works on local HTTP.
 const newMessageId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 let token = sessionStorage.getItem('grouptalk-token');
-let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, serviceStopped = false, conversationView, toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
+let state, events, mode = 'chat', replyTo = null, busy = false, connected = false, serviceStopped = false, conversationView = 'overview', toastTimer, renderSignature = '', approvalSignature = '', clientId = null;
 const params = new URLSearchParams(location.hash.slice(1));
 let joinKey = params.get('host') || params.get('invite') || '';
 $('#invite-input-wrap').hidden = Boolean(joinKey);
 if (params.has('host')) $('#join-name').placeholder = '留空时默认叫房主';
+else {
+  try { $('#join-name').value = localStorage.getItem('grouptalk-last-name') || ''; } catch { /* Browser storage is optional. */ }
+}
+if (params.has('review')) {
+  $('#join-form').hidden = true;
+  $('#review-link-hint').hidden = false;
+}
 
 async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
   if (serviceStopped) throw new Error('GroupTalk 服务已停止');
@@ -68,58 +75,75 @@ function sourceFileAttributes(messageId, file) {
   return `data-source-message="${esc(messageId)}" data-source-index="${file.index}" data-source-name="${esc(file.name)}"`;
 }
 
+const thumbnail = '<img alt="" decoding="async" hidden><span class="source-image-status" aria-hidden="true">加载缩略图</span>';
+
 function sourceFileActions(message, files) {
   return files.map((file) => {
     const source = sourceFileAttributes(message.id, file);
     const title = file.label === file.name ? file.name : `${file.label} · ${file.name}`;
     const download = `<button type="button" ${source} aria-label="下载 ${esc(file.name)}">下载</button>`;
     if (file.imageType) return `<span class="source-file-actions source-image-actions"><button type="button" class="source-thumbnail" ${source} data-source-image aria-label="放大 ${esc(title)}">` +
-      `<img alt="" decoding="async" hidden><span class="source-image-status" aria-hidden="true">加载缩略图</span></button>${download}</span>`;
+      `${thumbnail}</button>${download}</span>`;
     if (!file.preview) return `<button type="button" ${source}>下载 ${esc(title)}</button>`;
     return `<span class="source-file-actions"><button type="button" ${source} data-preview="${esc(file.preview)}">打开 ${esc(title)}</button>${download}</span>`;
   }).join('');
 }
 
-function overviewFile(file) {
-  const type = file.imageType ? '图片' : { html: 'HTML', markdown: 'MD' }[file.preview] || '附件';
+function reviewMaterial(file) {
+  const source = sourceFileAttributes(file.messageId, file);
+  const kind = file.imageType ? '图片' : { html: 'HTML', markdown: 'Markdown' }[file.preview] || '附件';
   const action = file.imageType ? 'data-source-image' : file.preview ? `data-preview="${esc(file.preview)}"` : '';
-  const verb = action ? '打开' : '下载';
-  return `<li><button type="button" class="overview-file" ${sourceFileAttributes(file.messageId, file)} ${action}
-    aria-label="${verb} ${esc(file.label)}" title="${esc(file.name)}"><small>${type}</small><span>${esc(file.label)}</span></button></li>`;
+  const verb = file.imageType ? '放大' : file.preview ? '预览' : '下载';
+  return `<li class="review-material">
+    ${file.imageType ? `<button type="button" class="review-thumbnail" ${source} ${action} aria-label="放大 ${esc(file.label)}">${thumbnail}</button>` : ''}
+    <div class="review-material-body">
+      <small>${kind}</small><p title="${esc(file.name)}">${esc(file.label)}</p>
+      <div class="review-material-actions">
+        ${file.imageType ? '' : `<button type="button" ${source} ${action} aria-label="${verb} ${esc(file.label)}">${verb}</button>`}
+        ${action ? `<button type="button" ${source} aria-label="下载 ${esc(file.label)}">下载</button>` : ''}
+      </div>
+    </div>
+  </li>`;
 }
 
-let overviewSignature = '';
+let summarySignature, coreSignature, materialsSignature;
 function renderOverview() {
-  const { title, goal, points, files, messageId, task, coreItems = [] } = state.overview || { points: [], files: [] };
-  const signature = JSON.stringify(state.overview ?? null);
-  if (signature === overviewSignature) return;
-  overviewSignature = signature;
-  const expanded = $('#overview-more-files')?.open;
-  const primary = files.slice(0, 4);
-  const image = files.find((file) => file.imageType);
-  const documentFile = files.find((file) => file.preview);
-  if (image && !primary.some((file) => file.imageType)) primary[primary.length - 1] = image;
-  if (documentFile && !primary.some((file) => file.preview)) primary[0] = documentFile;
-  const more = files.filter((file) => !primary.includes(file));
-  $('#room-overview-body').innerHTML = `
-    ${coreItems.length ? `<section class="core-info" aria-label="核心信息"><h3>核心信息</h3>${coreItems.map((item) => `
+  const { title, goal, points = [], files = [], messageId, task, coreItems = [] } = state.overview || {};
+  const summaryKey = JSON.stringify([title, goal, points, task, messageId]);
+  if (summaryKey !== summarySignature) {
+    summarySignature = summaryKey;
+    $('#review-summary').innerHTML = `
+      ${title ? `<p class="overview-subject">${esc(title)}</p>` : ''}
+      ${goal ? `<p class="overview-goal">${esc(goal)}</p>` : ''}
+      ${points.length ? `<dl class="overview-points">${points.map(({ label, text }) =>
+        `<div><dt>${esc(label)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>` : ''}
+      ${!title && !goal && !points.length ? '<p class="overview-empty">共享对话有内容后，会在这里提取摘要。</p>' : ''}
+      ${task ? `<p class="overview-current"><strong>${esc(statusLabels[task.status])}</strong> ${esc(task.request)}</p>` : ''}
+      ${messageId && (title || goal || points.length) ? `<button type="button" class="overview-jump" data-overview-message="${esc(messageId)}">查看摘要来源</button>` : ''}`;
+  }
+  const core = JSON.stringify(coreItems);
+  if (core !== coreSignature) {
+    coreSignature = core;
+    const cards = coreItems.map((item) => `
       <article class="core-info-card" data-core-id="${esc(item.id)}">
         <div class="core-info-kind">${esc({ conclusion: '结论', proposal: '建议', question: '待确认', action: '行动项', progress: '进展', artifact: '素材' }[item.kind])}</div>
         <h4>${esc(item.title)}</h4><div class="message-content">${rich(item.content)}</div>
         <div class="core-info-meta">${time(item.updatedAt)} · 第 ${item.revision} 版 · ${esc(item.requestedBy)} 请求</div>
         <button type="button" class="overview-jump" data-overview-message="${esc(item.messageId)}">查看来源</button>
-      </article>`).join('')}</section>` : ''}
-    ${title ? `<p class="overview-subject">${esc(title)}</p>` : ''}
-    ${goal ? `<p class="overview-goal">${esc(goal)}</p>` : ''}
-    ${task ? `<p class="overview-current"><strong>${esc(statusLabels[task.status])}</strong> ${esc(task.request)}</p>` : ''}
-    ${points.length ? `<dl class="overview-points">${points.map(({ label, text }) =>
-      `<div><dt>${esc(label)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>` : ''}
-    ${messageId && (title || points.length) ? `<button type="button" class="overview-jump" data-overview-message="${esc(messageId)}">查看上下文</button>` : ''}
-    <div class="overview-files">
-      <h3>关键产物 <span>${files.length}</span></h3>
-      ${primary.length ? `<ul>${primary.map(overviewFile).join('')}</ul>` : '<p class="overview-empty">共享的文档和图片会出现在这里。</p>'}
-      ${more.length ? `<details id="overview-more-files"${expanded ? ' open' : ''}><summary>其他产物（${more.length}）</summary><ul>${more.map(overviewFile).join('')}</ul></details>` : ''}
-    </div>`;
+      </article>`).join('');
+    $('#review-core-items').innerHTML = cards;
+    $('#sidebar-core-items').innerHTML = cards;
+  }
+  const materials = JSON.stringify(files);
+  if (materials !== materialsSignature) {
+    materialsSignature = materials;
+    $('#review-files-count').textContent = files.length || '';
+    $('#review-files').innerHTML = files.length ? `<ul class="review-materials">${files.map(reviewMaterial).join('')}</ul>` :
+      '<p class="overview-empty">共享对话里的文档、图片和附件会出现在这里。</p>';
+    syncSourceThumbnails();
+  }
+  $('#review-core-info').hidden = !coreItems.length;
+  $('#sidebar-core-info').hidden = conversationView === 'overview' || !coreItems.length;
 }
 
 function renderMessage(message) {
@@ -208,19 +232,20 @@ const imageObserver = new IntersectionObserver((entries) => {
     imageObserver.unobserve(target);
     void showSourceThumbnail(target);
   }
-}, { root: $('#conversation-scroll'), rootMargin: '160px' });
+}, { rootMargin: '160px' });
 
 function syncSourceThumbnails() {
   imageObserver.disconnect();
-  const buttons = [...$('#messages').querySelectorAll('[data-source-image]')];
-  const overviewImages = $('#room-overview-body').querySelectorAll('[data-source-image]');
-  const visible = new Set([...buttons, ...overviewImages].map(sourceFileUrl));
+  const buttons = document.querySelectorAll('#messages [data-source-image], #review-files [data-source-image]');
+  const visible = new Set([...buttons].map(sourceFileUrl));
   for (const [path, pending] of imageUrls) {
     if (visible.has(path)) continue;
     imageUrls.delete(path);
     void pending.then((url) => URL.revokeObjectURL(url), () => {});
   }
-  for (const button of buttons) imageObserver.observe(button);
+  for (const button of buttons) {
+    if (button.querySelector('img').hidden) imageObserver.observe(button);
+  }
 }
 
 const imageDialog = $('#source-image-dialog');
@@ -277,6 +302,7 @@ function render() {
       <small>${member.role === 'host' ? '房主' : '协作者'}</small>
       ${member.network ? `<small class="member-network">IP ${esc(member.network.ip)}</small><small class="member-network">MAC ${esc(member.network.mac || '未识别')}</small>` : ''}
     </div>${member.online ? '<span class="status-dot"></span>' : ''}
+    ${state.me.role === 'host' ? `<button type="button" class="member-rename" data-rename-member="${esc(member.id)}" aria-label="修改 ${esc(member.name)} 的用户名">改名</button>` : ''}
   </div>`).join('');
   $('#identity-button').innerHTML = `${avatar(state.me.id, state.me.name)}<span>${esc(state.me.name)}</span><span>⌄</span>`;
   $('#connection-label').textContent = serviceStopped ? '服务已停止' : connected ? '已连接' : '正在重连';
@@ -291,17 +317,21 @@ function render() {
   const pending = state.messages.filter((message) => message.role === 'user' && !message.history && message.seq > state.deliveredSeq).length;
   $('#context-status').textContent = pending ? `${pending} 条讨论待补充 · 下次参与时一并交给 Codex` : '当前讨论已同步给 Codex · 新消息会在下次参与时补充';
   const sourceCount = state.messages.filter((message) => message.history).length;
-  conversationView ??= sourceCount ? 'source' : 'room';
+  const showingOverview = conversationView === 'overview';
   const showingSource = conversationView === 'source';
   const messages = state.messages.filter((message) => Boolean(message.history) === showingSource);
-  $('#conversation-views').hidden = !sourceCount;
+  $('#review-view').hidden = !showingOverview;
+  $('#conversation-scroll').hidden = showingOverview;
+  $('#composer-area').hidden = conversationView !== 'room';
+  $('.topic-bar').hidden = showingOverview && Boolean(state.overview?.goal);
+  $('[data-conversation-view="source"]').hidden = !sourceCount;
   $('#source-count').textContent = sourceCount;
   document.querySelectorAll('[data-conversation-view]').forEach((button) => {
     button.setAttribute('aria-pressed', String(button.dataset.conversationView === conversationView));
   });
   const signature = JSON.stringify(showingSource ? [conversationView, messages.length]
     : [conversationView, messages.length, state.tasks.map((task) => [task.id, task.contextCount, task.status]), state.runtime.text, state.runtime.state, serviceStopped]);
-  if (signature !== renderSignature) {
+  if (!showingOverview && signature !== renderSignature) {
     renderSignature = signature;
     const scroll = $('#conversation-scroll');
     const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
@@ -311,12 +341,13 @@ function render() {
     syncSourceThumbnails();
     const active = state.tasks.find((task) => task.id === state.runtime.taskId);
     $('#live-message').innerHTML = !showingSource && working ? `<article class="message agent-message"><span class="avatar codex-avatar" aria-hidden="true">✳</span><div class="message-body"><div class="message-meta"><span class="message-name">Codex</span><span class="message-tag">${active?.mode === 'execute' ? '正在实现' : '一起分析'}</span></div><div class="message-content">${state.runtime.text ? rich(state.runtime.text) : '<span class="thinking" aria-label="正在思考"><i></i><i></i><i></i></span>'}</div><div class="message-context">${esc(active?.progress.at(-1)?.text.split('\n')[0] || `正在结合 ${active?.contextCount || 0} 条新讨论`)}</div></div></article>` : '';
-    if (nearBottom || !hadMessages) requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
+    if (nearBottom || !hadMessages) scroll.scrollTo({ top: scroll.scrollHeight, behavior: 'instant' });
   }
   $('#settings-button').hidden = state.me.role !== 'host';
   $('#settings-button').disabled = serviceStopped;
   $('#stop-service').hidden = !state.canStop || serviceStopped;
   $('#share-button').hidden = state.me.role !== 'host';
+  $('#show-review-links').hidden = state.me.role !== 'host' || serviceStopped;
   $('#note-count').textContent = state.notes.length;
   const noteLabels = { decision: '已形成的结论', question: '待确认的问题', action: '下一步行动' };
   $('#notes').innerHTML = state.notes.length ? state.notes.map((note) => `<article class="note-card ${esc(note.kind)} ${note.done ? 'done' : ''}"><div class="note-kind"><span>${{ decision: '◇', question: '？', action: '↗' }[note.kind]}</span>${noteLabels[note.kind]}</div><p>${esc(note.text)}</p><div class="note-author"><span>${esc(note.authorName)} · ${time(note.createdAt)}</span>${note.authorId === state.me.id || state.me.role === 'host' ? `<button data-toggle-note="${esc(note.id)}" data-done="${!note.done}">${note.done ? '重新打开' : '标记完成'}</button>` : ''}</div></article>`).join('') : '<div class="empty-notes"><span class="empty-icon">▱</span><h3>讨论的成果，值得被留下</h3><p>记录已形成的结论、还没解决的问题，<br>以及接下来要一起做的事。</p></div>';
@@ -374,6 +405,9 @@ $('#join-form').addEventListener('submit', async (event) => {
   const button = $('#join-form button'); button.disabled = true; $('#join-error').textContent = '';
   try {
     const result = await api('/api/join', { key: joinKey || $('#join-key').value.trim(), name: $('#join-name').value });
+    if (result.member.role !== 'host') {
+      try { localStorage.setItem('grouptalk-last-name', result.member.name); } catch { /* Browser storage is optional. */ }
+    }
     token = result.token; sessionStorage.setItem('grouptalk-token', token); await enter();
   } catch (error) { $('#join-error').textContent = error.message; } finally { button.disabled = false; }
 });
@@ -391,27 +425,41 @@ $('#message-form').addEventListener('submit', async (event) => {
   try {
     await api('/api/messages', { text: $('#message-input').value, mode, replyTo, clientId });
     $('#message-input').value = ''; $('#message-input').style.height = 'auto'; replyTo = null; clientId = null;
-    conversationView = 'room';
     render();
-    $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
-  } catch (error) { toast(error.message); } finally { busy = false; updateComposer(); $('#message-input').focus(); }
+    if (conversationView === 'room') $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
+  } catch (error) { toast(error.message); } finally {
+    busy = false;
+    updateComposer();
+    if (conversationView === 'room') $('#message-input').focus();
+  }
 });
+
+function selectConversation(view) {
+  if (conversationView === view) return;
+  conversationView = view;
+  render();
+  if (view === 'overview') return;
+  const scroll = $('#conversation-scroll');
+  scroll.scrollTo({ top: view === 'source' ? 0 : scroll.scrollHeight, behavior: 'instant' });
+}
+
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('button'); if (!button) return;
   try {
     if (button.hasAttribute('data-close')) button.closest('dialog').close();
-    if (button.dataset.conversationView) {
-      conversationView = button.dataset.conversationView;
-      render();
-      $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
-    }
+    if (button.dataset.conversationView) selectConversation(button.dataset.conversationView);
     if (button.dataset.overviewMessage) {
       const found = state.messages.find(({ id }) => id === button.dataset.overviewMessage);
       if (found) {
         conversationView = found.history ? 'source' : 'room';
         if (overviewPanel.drawer.matches) setPanelOpen(overviewPanel, false);
         render();
-        requestAnimationFrame(() => document.getElementById(`message-${found.id}`)?.scrollIntoView({ block: 'center' }));
+        const source = document.getElementById(`message-${found.id}`);
+        if (source) {
+          source.tabIndex = -1;
+          source.focus({ preventScroll: true });
+          source.scrollIntoView({ block: 'center', behavior: 'instant' });
+        }
       }
     }
     if (button.dataset.sourceMessage) {
@@ -423,7 +471,12 @@ document.addEventListener('click', async (event) => {
       } finally { button.disabled = false; }
     }
     if (button.dataset.mode) { mode = button.dataset.mode; clientId = null; updateComposer(); $('#message-input').focus(); }
-    if (button.dataset.reply) { replyTo = button.dataset.reply; updateComposer(); $('#message-input').focus(); }
+    if (button.dataset.reply) {
+      replyTo = button.dataset.reply;
+      selectConversation('room');
+      updateComposer();
+      $('#message-input').focus();
+    }
     if (button.id === 'clear-reply') { replyTo = null; updateComposer(); }
     if (button.dataset.cancel) await api(`/api/tasks/${button.dataset.cancel}/cancel`, {});
     if (button.dataset.approval) {
@@ -432,12 +485,39 @@ document.addEventListener('click', async (event) => {
       finally { button.disabled = false; }
     }
     if (button.dataset.toggleNote) await api(`/api/notes/${button.dataset.toggleNote}`, { done: button.dataset.done === 'true' });
+    if (button.dataset.renameMember) {
+      const member = state.members.find(({ id }) => id === button.dataset.renameMember);
+      if (!member) return;
+      $('#rename-member-form').dataset.memberId = member.id;
+      $('#rename-member-name').value = member.name;
+      $('#rename-member-detail').textContent = member.network?.ip ? `IP ${member.network.ip}` : '该成员的连接地址尚未记录';
+      modal('#rename-member-dialog');
+    }
+    if (button.dataset.revokeReview) {
+      await api(`/api/review-links/${button.dataset.revokeReview}/revoke`, {});
+      $('#review-link-result').hidden = true;
+      renderActiveReviews((await api('/api/review-links')).active);
+    }
     if (button.id === 'recover-queue') { if (confirm('请先检查上次任务的工作区变更。继续后不会重跑状态不明的任务，后续排队任务将开始执行。')) await api('/api/recover', {}); }
     if (button.dataset.noteMessage) { $('#note-text').value = state.messages.find((message) => message.id === button.dataset.noteMessage).text.slice(0, 1000); modal('#note-dialog'); }
     if (button.dataset.sideAnchor) sideChat.start(state.messages.find((message) => message.id === button.dataset.sideAnchor));
     if (button.dataset.viewSide) sideChat.open(button.dataset.viewSide);
   } catch (error) { toast(error.message); }
 });
+$('#rename-member-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = $('#rename-member-save');
+  button.disabled = true;
+  try {
+    await api(`/api/members/${form.dataset.memberId}/name`, { name: $('#rename-member-name').value });
+    $('#rename-member-dialog').close();
+  } catch (error) { toast(error.message); } finally { button.disabled = false; }
+};
+$('#enter-discussion').onclick = () => {
+  selectConversation('room');
+  $('[data-conversation-view="room"]').focus();
+};
 $('#example-button').onclick = () => { $('#message-input').value = '我们先对齐一下：这个需求最想解决什么问题？'; updateComposer(); $('#message-input').focus(); };
 $('#add-note').onclick = () => { $('#note-text').value = ''; modal('#note-dialog'); };
 membersPanel.toggle.onclick = () => {
@@ -489,6 +569,46 @@ $('#share-address').onchange = updateInvitationAddress;
 $('#share-button').onclick = async () => { try { displayInvitation(await api('/api/invite')); modal('#share-dialog'); } catch (error) { toast(error.message); } };
 $('#copy-link').onclick = async () => { try { await navigator.clipboard.writeText($('#share-link').value); toast('邀请链接已复制'); } catch { $('#share-link').select(); document.execCommand('copy'); toast('链接已选中，可直接复制'); } };
 $('#rotate-invite').onclick = async () => { if (!confirm('重置后，旧邀请链接将不能加入。已加入成员继续保留身份。')) return; try { displayInvitation(await api('/api/invite/rotate', {})); toast('邀请链接已重置'); } catch (error) { toast(error.message); } };
+
+let reviewAddresses = [];
+function renderActiveReviews(active) {
+  $('#active-review-links').innerHTML = active.length ? `<h3>活动评审链接</h3><ul>${active.map((item) =>
+    `<li>${esc(item.ip || '尚未访问')} · ${time(item.expiresAt)} 到期
+    <button type="button" class="text-button" data-revoke-review="${esc(item.id)}">撤销</button></li>`).join('')}</ul>` : '';
+}
+$('#show-review-links').onclick = async () => {
+  try {
+    const { active, links } = await api('/api/review-links');
+    reviewAddresses = links;
+    $('#review-address').innerHTML = links.map(({ label }, index) => `<option value="${index}">${esc(label)}</option>`).join('');
+    $('#review-address-hint').textContent = links.every(({ localOnly }) => localOnly) ? '当前仅本机可用。跨设备需要 HTTPS。' : '';
+    const overview = state.overview || {};
+    const lines = [overview.goal, ...(overview.points || []).map(({ label, text }) => `${label}：${text}`),
+      ...(overview.coreItems || []).map(({ title, content }) => `${title}\n${content}`)].filter(Boolean);
+    $('#review-context').value = lines.join('\n\n').slice(0, 9000);
+    $('#review-link-result').hidden = true;
+    renderActiveReviews(active);
+    modal('#review-links-dialog');
+  } catch (error) { toast(error.message); }
+};
+$('#review-link-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $('#issue-review-link');
+  button.disabled = true;
+  try {
+    const address = new URL(reviewAddresses[Number($('#review-address').value)].url);
+    const { token: reviewToken } = await api('/api/review-links', { context: $('#review-context').value });
+    address.hash = `review=${reviewToken}`;
+    $('#review-link').value = address.href;
+    $('#review-link-result').hidden = false;
+    renderActiveReviews((await api('/api/review-links')).active);
+  } catch (error) { toast(error.message); } finally { button.disabled = false; }
+};
+$('#copy-review-link').onclick = async () => {
+  const field = $('#review-link');
+  try { await navigator.clipboard.writeText(field.value); toast('评审链接已复制'); }
+  catch { field.select(); document.execCommand('copy'); toast('评审链接已选中'); }
+};
 $('#identity-button').onclick = () => { $('#identity-detail').textContent = `${state.me.name} · ${state.me.role === 'host' ? '房主' : '协作者'}`; modal('#identity-dialog'); };
 $('#leave-button').onclick = () => { events?.close(); sessionStorage.removeItem('grouptalk-token'); location.reload(); };
 if (token) enter().catch((error) => { sessionStorage.removeItem('grouptalk-token'); token = null; $('#join-error').textContent = error.message; });

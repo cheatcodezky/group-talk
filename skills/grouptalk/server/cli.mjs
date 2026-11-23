@@ -13,6 +13,7 @@ const { values } = parseArgs({ options: {
   port: { type: 'string' }, host: { type: 'string', default: '0.0.0.0' },
   cwd: { type: 'string', default: process.cwd() }, data: { type: 'string' },
   thread: { type: 'string' }, model: { type: 'string' },
+  'tls-cert': { type: 'string' }, 'tls-key': { type: 'string' },
   share: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
 } });
 if (values.help) {
@@ -20,6 +21,7 @@ if (values.help) {
 
 node server/cli.mjs [--share] [--thread 来源线程ID] [--cwd 项目目录]
                    [--port 端口] [--host 地址] [--data 数据目录] [--model 模型]
+                   [--tls-cert 证书文件 --tls-key 私钥文件]
 
 --share 默认选择当前 Codex 对话、自动分配端口，并为每个来源对话单独保存房间。
 --thread 指定来源对话。重启同一个房间时会恢复其协作分支。
@@ -42,6 +44,11 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
   process.exit(1);
 }
 const lockPath = resolve(dataPath, 'server.lock');
+const certPath = values['tls-cert'], keyPath = values['tls-key'];
+if (Boolean(certPath) !== Boolean(keyPath)) {
+  console.error('请同时指定 TLS 证书和私钥。');
+  process.exit(1);
+}
 function acquireLock() {
   mkdirSync(dataPath, { recursive: true, mode: 0o700 });
   let fd;
@@ -90,16 +97,18 @@ try {
   }
   store.state.workspace = cwd;
   store.save();
+  const tls = certPath ? { cert: readFileSync(certPath), key: readFileSync(keyPath) } : undefined;
   const agent = new CodexAgent({ cwd, model: values.model });
   room = new Room({ store, agent, judge: new JevJudge(), cwd, sourceThreadId });
   console.log('正在连接本机 Codex，准备共享协作会话…');
   await room.initialize();
-  web = await serve({ room, host: values.host, port, onStop: () => stop() });
-  const base = `http://127.0.0.1:${web.port}`;
+  web = await serve({ room, host: values.host, port, tls, onStop: () => stop() });
+  const protocol = tls ? 'https' : 'http';
+  const base = `${protocol}://127.0.0.1:${web.port}`;
   console.log(`\nGroupTalk 已启动\n工作区: ${cwd}\n来源线程: ${store.state.sourceThreadId || '新会话'}\n协作线程: ${store.state.threadId}\n`);
   console.log(`房主入口: ${base}/#host=${store.state.hostKey}`);
   console.log(`本机邀请: ${base}/#invite=${store.state.invite}`);
-  for (const link of invitationLinks({ port: web.port, host: values.host, invite: store.state.invite })) {
+  for (const link of invitationLinks({ port: web.port, host: values.host, invite: store.state.invite, protocol })) {
     if (!link.localOnly) console.log(`局域网邀请 (${link.label}): ${link.url}`);
   }
   console.log(`\nJev: ${room.judge.ready ? '已配置，可在房间中开启' : '未配置，使用 @Codex 点名模式'}\nCtrl+C 停止服务；同一数据目录重启会保留房间和协作线程。`);

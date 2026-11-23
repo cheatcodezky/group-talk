@@ -1,4 +1,5 @@
 import http from 'node:http';
+import https from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
@@ -8,6 +9,7 @@ import { clientAddress, lookupClientMac } from './neighbors.mjs';
 import { indexSourceFiles, MAX_MARKDOWN_BYTES } from './source-files.mjs';
 import { createPreviewAccess, previewPolicy, renderMarkdown } from './preview.mjs';
 import { roomOverview } from './overview.mjs';
+import { createReviews } from './reviews.mjs';
 
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
@@ -21,6 +23,10 @@ function isHostConnection(req, url) {
   return loopback(req.socket.remoteAddress) && loopback(req.socket.localAddress)
     && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
 }
+function memberAddress(req) {
+  const ip = clientAddress(req.socket.remoteAddress);
+  return ip === '::1' ? '127.0.0.1' : ip;
+}
 async function body(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) throw new HttpError(415, '请使用 JSON 请求');
   let size = 0; const chunks = [];
@@ -31,21 +37,24 @@ async function body(req) {
   return parsed;
 }
 
-export function invitationLinks({ port, host, invite, interfaces = networkInterfaces() }) {
+export function invitationLinks({ port, host, invite, protocol = 'http', interfaces = networkInterfaces() }) {
   const links = [];
   if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
     for (const [name, entries] of Object.entries(interfaces)) for (const entry of entries || []) {
-      if (entry.family === 'IPv4' && !entry.internal) links.push({ label: `${name} · ${entry.address}`, url: `http://${entry.address}:${port}/#invite=${invite}`, physical: /^(en\d|eth\d|wlan\d|Wi-Fi)/i.test(name) });
+      if (entry.family === 'IPv4' && !entry.internal) links.push({ label: `${name} · ${entry.address}`, url: `${protocol}://${entry.address}:${port}/#invite=${invite}`, physical: /^(en\d|eth\d|wlan\d|Wi-Fi)/i.test(name) });
     }
     links.sort((a, b) => Number(b.physical) - Number(a.physical));
   }
-  links.push({ label: '仅本机 · 127.0.0.1', url: `http://127.0.0.1:${port}/#invite=${invite}`, localOnly: true });
+  links.push({ label: '仅本机 · 127.0.0.1', url: `${protocol}://127.0.0.1:${port}/#invite=${invite}`, localOnly: true });
   return links;
 }
 
-export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac, onStop }) {
+export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = lookupClientMac, onStop, tls }) {
   const source = await indexSourceFiles(room);
   const previewAccess = createPreviewAccess();
+  const reviews = createReviews(room);
+  const protocol = tls ? 'https' : 'http';
+  const inviteLinks = (invite) => invitationLinks({ port: server.address().port, host, invite, protocol });
   const snapshot = (member, overview = roomOverview(room.state, source.files)) => ({
     ...room.snapshot(member), sourceFiles: source.files, overview, canStop: Boolean(onStop) && member.role === 'host',
   });
@@ -63,15 +72,15 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
   };
   const scheduleFlush = () => { if (!flushTimer) flushTimer = setTimeout(flush, 35); };
   const observe = (req, memberId) => {
-    void room.observeNetwork(memberId, clientAddress(req.socket.remoteAddress), lookupMac).catch(() => {});
+    void room.observeNetwork(memberId, memberAddress(req), lookupMac).catch(() => {});
   };
   room.on('change', scheduleFlush);
-  const server = http.createServer(async (req, res) => {
+  const handleRequest = async (req, res) => {
     res.setHeader('x-content-type-options', 'nosniff');
     res.setHeader('referrer-policy', 'no-referrer');
     res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
-      const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      const url = new URL(req.url, `${protocol}://${req.headers.host || 'localhost'}`);
       if (stopRequested && !(url.pathname === '/api/stop' && req.method === 'POST')) throw new HttpError(503, '房间正在停止');
       if (req.method === 'GET' && FILES.has(url.pathname)) {
         const [file, type] = FILES.get(url.pathname);
@@ -109,13 +118,22 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       if (url.pathname === '/api/join' && req.method === 'POST') {
         const input = await body(req);
         if (stopRequested) throw new HttpError(503, '房间正在停止');
-        const joined = room.join(input, { local: isHostConnection(req, url) });
+        const joined = room.join(input, { local: isHostConnection(req, url), ip: memberAddress(req) });
         observe(req, joined.member.id);
         return json(res, 201, joined);
       }
       const header = req.headers.authorization || '';
       const token = header.startsWith('Bearer ') ? header.slice(7) : url.pathname === '/api/events' ? url.searchParams.get('session') : '';
-      const member = room.authenticate(token);
+      if (url.pathname === '/api/review' && ['GET', 'POST'].includes(req.method)) {
+        if (!req.socket.encrypted && !isHostConnection(req, url)) throw new HttpError(403, '局域网评审需要使用 HTTPS');
+        const ip = memberAddress(req);
+        if (req.method === 'GET') return json(res, 200, reviews.read(token, ip));
+        const input = await body(req);
+        if (stopRequested) throw new HttpError(503, '房间正在停止');
+        const message = reviews.comment(token, ip, input);
+        return json(res, 201, { id: message.id, authorName: message.authorName });
+      }
+      const member = room.authenticate(token, memberAddress(req));
       if (member.role === 'host' && !isHostConnection(req, url)) throw new HttpError(403, '房主入口仅可在开房电脑上使用');
       if (url.pathname === '/api/stop' && req.method === 'POST') {
         if (member.role !== 'host') throw new HttpError(403, '仅本机房主可以停止服务');
@@ -169,7 +187,11 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
       }
       if (url.pathname === '/api/invite' && req.method === 'GET') {
         if (member.role !== 'host') throw new HttpError(403, '仅房主可以查看邀请');
-        return json(res, 200, { invite: room.state.invite, links: invitationLinks({ port: server.address().port, host, invite: room.state.invite }) });
+        return json(res, 200, { invite: room.state.invite, links: inviteLinks(room.state.invite) });
+      }
+      if (url.pathname === '/api/review-links' && req.method === 'GET') {
+        if (member.role !== 'host') throw new HttpError(403, '仅本机房主可以管理评审链接');
+        return json(res, 200, { active: reviews.list(), links: inviteLinks('').filter((link) => tls || link.localOnly) });
       }
       if (req.method === 'POST') {
         const input = await body(req);
@@ -185,6 +207,14 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
           return json(res, 200, { ok: true });
         }
         if (url.pathname === '/api/settings') { room.configure(member, input); return json(res, 200, { ok: true }); }
+        const reviewRevoke = url.pathname.match(/^\/api\/review-links\/([\da-f-]+)\/revoke$/);
+        if (url.pathname === '/api/review-links' || reviewRevoke) {
+          if (member.role !== 'host') throw new HttpError(403, '仅本机房主可以管理评审链接');
+          if (reviewRevoke) { reviews.revoke(reviewRevoke[1]); return json(res, 200, { ok: true }); }
+          return json(res, 201, reviews.issue(input));
+        }
+        const memberRoute = url.pathname.match(/^\/api\/members\/([\da-f-]+)\/name$/);
+        if (memberRoute) return json(res, 200, room.renameMember(member, memberRoute[1], input));
         const approvalRoute = url.pathname.match(/^\/api\/approvals\/([^/]+)$/);
         if (approvalRoute) { room.decideApproval(member, approvalRoute[1], input.decision); return json(res, 200, { ok: true }); }
         if (url.pathname === '/api/notes') return json(res, 201, room.addNote(member, input));
@@ -193,12 +223,13 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
         if (url.pathname === '/api/recover') { room.recover(member); return json(res, 200, { ok: true }); }
         if (url.pathname === '/api/invite/rotate') {
           const invite = room.rotateInvite(member);
-          return json(res, 200, { invite, links: invitationLinks({ port: server.address().port, host, invite }) });
+          return json(res, 200, { invite, links: inviteLinks(invite) });
         }
       }
       json(res, 404, { error: '接口不存在' });
     } catch (error) { if (!res.headersSent) json(res, error.status || 500, { error: error.message }); else res.end(); }
-  });
+  };
+  const server = tls ? https.createServer(tls, handleRequest) : http.createServer(handleRequest);
   server.requestTimeout = 15000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, host, resolve); });
   return {

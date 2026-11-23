@@ -66,7 +66,7 @@ export function roomOverview(state, sourceFiles) {
     ['当前进展', newerReplies.find(({ update }) => update)?.update || recap?.update || (recap?.intro !== goal && recap?.intro)],
     ['实测结果', newerReplies.find(({ results }) => results)?.results || recap?.results],
     [openNote?.kind === 'action' ? '下一步' : '待确认', plain(openNote?.text) || newerReplies.find(({ next }) => next)?.next || recap?.next],
-  ].filter(([, text]) => text).map(([label, text]) => ({ label, text: shorten(text, 96) }));
+  ].filter(([, text]) => text).map(([label, text]) => ({ label, text: shorten(text, 360) }));
 
   const seen = new Set();
   const files = [];
@@ -81,8 +81,8 @@ export function roomOverview(state, sourceFiles) {
   const currentTask = state.tasks.findLast(({ status }) => status === 'running' || status === 'starting') ||
     state.tasks.find(({ status }) => status === 'awaiting_approval' || status === 'queued');
   return {
-    title: shorten(recap?.title || '', 66), goal: shorten(goal || '', 116), points, files, coreItems: state.coreItems || [],
-    messageId: recap?.message.id,
+    title: shorten(recap?.title || '', 100), goal: shorten(goal || '', 600), points, files, coreItems: state.coreItems || [],
+    messageId: recap?.message.id || initialRequest?.id,
     task: currentTask && { status: currentTask.status, request: shorten(plain(currentTask.request), 76) },
   };
 }
