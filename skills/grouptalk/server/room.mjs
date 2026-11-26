@@ -4,6 +4,7 @@ import { digest, secret } from './store.mjs';
 import { check, shortText } from './validation.mjs';
 import { SideChats } from './side-chats.mjs';
 import { CORE_INFO_INSTRUCTIONS, parseCoreUpdate, applyCoreUpdate } from './core-info.mjs';
+import { gitInspectionCommand } from './git-inspection.mjs';
 
 export { HttpError } from './validation.mjs';
 
@@ -149,6 +150,7 @@ export class Room extends EventEmitter {
       deliveredSeq: this.state.deliveredSeq, queuePaused: this.state.queuePaused,
       runtime: this.runtime, usage: this.state.usage, workspace: this.cwd, model: this.model,
       shellRestricted: Boolean(this.agent.shellRestricted),
+      canInspectGit: member.role === 'host' && Boolean(this.agent.canInspectGit),
       threadId: this.state.threadId, sourceThreadId: this.state.sourceThreadId,
     };
   }
@@ -164,6 +166,20 @@ export class Room extends EventEmitter {
     };
   }
   canExecute(member) { return member.role === 'host' || this.state.settings.allowExecution; }
+  async inspectGit(member, input) {
+    check(member.role === 'host', 403, '仅开房电脑上的房主可以检查 Git');
+    check(this.agent.canInspectGit && !this.agent.disconnected, 409, '当前房间无法运行只读 Git 检查');
+    const command = gitInspectionCommand(input);
+    const { text, truncated } = await this.agent.inspectGit(command);
+    check(!this.closed, 409, '房间已停止');
+    const output = text ? '\n\n```text\n' + text.replaceAll('```', '`` `') + '\n```' : '\n\n没有输出。';
+    const message = this.store.addMessage({
+      role: 'user', authorId: member.id, authorName: member.name, mode: 'chat',
+      text: `房主共享了只读 Git 检查结果\n\n${command.join(' ')}${output}${truncated ? '\n\n输出已截断。' : ''}`,
+    });
+    this.commit();
+    return message;
+  }
   post(member, input) {
     const text = shortText(input.text, 6000, '消息');
     const clientId = shortText(input.clientId, 100, '消息标识');

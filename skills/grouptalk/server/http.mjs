@@ -199,6 +199,7 @@ export async function serve({ room, host = '0.0.0.0', port = 4317, lookupMac = l
         const input = await body(req);
         if (stopRequested) throw new HttpError(503, '房间正在停止');
         if (url.pathname === '/api/messages') return json(res, 201, room.post(member, input));
+        if (url.pathname === '/api/git-inspection') return json(res, 201, await room.inspectGit(member, input));
         if (url.pathname === '/api/side-chats') return json(res, 201, { id: room.sideChats.create(member, input).id });
         const sideRoute = url.pathname.match(/^\/api\/side-chats\/([^/]+)\/(messages|share|cancel)$/);
         if (sideRoute) {

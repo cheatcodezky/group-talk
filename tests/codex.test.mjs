@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodexAgent, readLocalTranscript } from '../skills/grouptalk/server/codex.mjs';
+import { gitInspectionCommand, inspectGit } from '../skills/grouptalk/server/git-inspection.mjs';
 
 class FakeRpc extends EventEmitter {
   calls = [];
@@ -70,6 +71,26 @@ test('Codex 选择可用默认模型、按模式设置沙箱、合并流式回�
   assert.deepEqual(policy.writableRoots, ['/tmp/workspace']);
   assert.ok(rpc.calls.filter(({ method }) => method === 'turn/start').every(({ params }) => params.approvalPolicy === 'on-request' && params.approvalsReviewer === 'user'));
   agent.close();
+});
+
+test('只读 Git 遵守组织限制，已登录运行时可执行不触发钩子的命令', async () => {
+  const command = gitInspectionCommand({ operation: 'diff', base: '发布/版本', head: 'HEAD' });
+  const methods = [];
+  let requirements = { featureRequirements: { hooks: false }, allowedLoginMethods: ['api'] };
+  const rpc = { async request(method, params) {
+    methods.push(method);
+    if (method === 'config/read') return { layers: [] };
+    if (method === 'configRequirements/read') return { requirements };
+    assert.deepEqual(params.sandboxPolicy, { type: 'readOnly', networkAccess: false });
+    assert.deepEqual(params.command, command);
+    return { exitCode: 0, stdout: 'M\tpreview.md\n' };
+  } };
+  const options = { rpc, cwd: '/tmp/workspace', command };
+  assert.deepEqual(await inspectGit(options), { text: 'M\tpreview.md', truncated: false });
+  methods.length = 0;
+  requirements = { allowedSandboxModes: ['workspace-write'] };
+  await assert.rejects(inspectGit(options), /无法独立核对组织命令策略/);
+  assert.deepEqual(methods, ['config/read', 'configRequirements/read']);
 });
 
 test('只处理当前执行回合的单次审批，拒绝持久授权，并在回合结束时撤下审批', async () => {

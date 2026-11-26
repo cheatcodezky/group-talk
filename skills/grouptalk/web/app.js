@@ -343,6 +343,7 @@ function render() {
   $('#settings-button').disabled = serviceStopped;
   $('#stop-service').hidden = !state.canStop || serviceStopped;
   $('#share-button').hidden = state.me.role !== 'host';
+  $('#show-git-inspection').hidden = !state.canInspectGit || serviceStopped;
   $('#show-review-links').hidden = state.me.role !== 'host' || serviceStopped;
   $('#note-count').textContent = state.notes.length;
   const noteLabels = { decision: '已形成的结论', question: '待确认的问题', action: '下一步行动' };
@@ -376,6 +377,36 @@ function updateComposer() {
     $('#reply-preview').innerHTML = `<span>回复 ${esc(message?.authorName)}：${esc(message?.text.slice(0, 140))}</span><button type="button" class="icon-button" id="clear-reply" aria-label="取消引用">×</button>`;
   }
 }
+
+function updateGitFields() {
+  const operation = $('#git-operation').value;
+  $('#git-base-field').hidden = operation !== 'diff';
+  $('#git-head-field').hidden = operation === 'status';
+  $('#git-base').required = operation === 'diff';
+  $('#git-head').required = operation !== 'status';
+}
+$('#git-operation').onchange = updateGitFields;
+$('#show-git-inspection').onclick = () => {
+  $('#git-inspection-error').textContent = '';
+  updateGitFields();
+  modal('#git-inspection-dialog');
+};
+$('#git-inspection-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $('#run-git-inspection');
+  const errorLabel = $('#git-inspection-error');
+  button.disabled = true;
+  errorLabel.textContent = '';
+  try {
+    await api('/api/git-inspection', {
+      operation: $('#git-operation').value,
+      base: $('#git-base').value.trim(),
+      head: $('#git-head').value.trim(),
+    });
+    $('#git-inspection-dialog').close();
+    selectConversation('room');
+  } catch (error) { errorLabel.textContent = error.message; } finally { button.disabled = false; }
+};
 async function enter() {
   state = await api('/api/bootstrap');
   $('#join-screen').hidden = true; $('#app').hidden = false;

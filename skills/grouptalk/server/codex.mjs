@@ -1,8 +1,7 @@
 import { CodexRpc } from './rpc.mjs';
 import { createReadStream } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { commandRuleFiles, inspectGit } from './git-inspection.mjs';
 
 export async function readLocalTranscript(path) {
   if (!path?.endsWith('.jsonl')) return [];
@@ -42,22 +41,6 @@ function agentError(message) {
 
 const APPROVAL_POLICY = { approvalPolicy: 'on-request', approvalsReviewer: 'user' };
 
-async function hasSavedRules(layers) {
-  if (!Array.isArray(layers)) return true;
-  for (const { name, disabledReason } of layers) {
-    if (disabledReason || !name) continue;
-    if (['mdm', 'enterpriseManaged', 'legacyManagedConfigTomlFromMdm'].includes(name.type)) return true;
-    const folder = name.dotCodexFolder || (name.file && dirname(name.file));
-    if (!folder) continue;
-    try {
-      if ((await readdir(join(folder, 'rules'))).some((file) => file.endsWith('.rules'))) return true;
-    } catch (error) {
-      if (error.code !== 'ENOENT') return true;
-    }
-  }
-  return false;
-}
-
 function approvalDetails(method, params, operation) {
   const { reason, cwd, networkApprovalContext, additionalPermissions } = params;
   if (method === 'item/commandExecution/requestApproval') {
@@ -95,7 +78,9 @@ export class CodexAgent {
     });
     await this.rpc.initialize();
     const effective = await this.rpc.request('config/read', { cwd: this.cwd, includeLayers: true });
-    this.shellRestricted = await hasSavedRules(effective?.layers);
+    const ruleFiles = await commandRuleFiles(effective?.layers);
+    this.shellRestricted = ruleFiles === null || ruleFiles.length > 0;
+    this.canInspectGit = Boolean(ruleFiles?.length);
     const threadConfig = { 'features.apps': false, 'features.plugins': false, 'features.hooks': false };
     for (const server of Object.keys(effective?.config?.mcp_servers || {})) {
       threadConfig[`mcp_servers.${server}.enabled`] = false;
@@ -235,6 +220,9 @@ export class CodexAgent {
   }
   async interrupt() {
     if (this.current?.turnId) await this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId: this.current.turnId });
+  }
+  inspectGit(command) {
+    return inspectGit({ rpc: this.rpc, cwd: this.cwd, command });
   }
   close() { return this.rpc?.close(); }
 }

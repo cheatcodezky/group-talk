@@ -38,6 +38,7 @@
           <button class="share-button side-toggle" id="show-side-chat" aria-controls="side-panel" aria-expanded="false">侧聊</button>
           <button class="icon-button" id="settings-button" title="房间设置" aria-label="房间设置">⚙</button>
           <button class="share-button" id="share-button"><span aria-hidden="true">↗</span> 邀请同伴</button>
+          <button class="panel-toggle" id="show-git-inspection" type="button" hidden>Git 检查</button>
           <button class="panel-toggle" id="show-review-links" type="button" hidden>评审链接</button>
           <button class="share-button danger-button" id="stop-service" type="button" hidden>停止服务</button>
         </div>
@@ -109,6 +110,18 @@
   <dialog id="source-image-dialog" aria-labelledby="source-image-title">
     <div class="dialog-heading"><h2 id="source-image-title">图片预览</h2><button type="button" class="icon-button" data-close aria-label="关闭图片预览">×</button></div>
     <img id="source-image-full" alt="">
+  </dialog>
+  <dialog id="git-inspection-dialog" aria-labelledby="git-inspection-title">
+    <form id="git-inspection-form">
+      <div class="dialog-heading"><h2 id="git-inspection-title">只读 Git 检查</h2><button type="button" class="icon-button" data-close aria-label="关闭">×</button></div>
+      <p>读取当前工作区的 Git 信息，并把结果发到群聊。结果也可作为下一次 @Codex 的背景。</p>
+      <label for="git-operation">检查内容</label>
+      <select id="git-operation"><option value="status">工作区状态</option><option value="log">最近 12 条提交</option><option value="diff">比较两个分支的文件改动</option></select>
+      <div id="git-base-field" hidden><label for="git-base">基准分支</label><input id="git-base" maxlength="200" placeholder="例如 origin/main"></div>
+      <div id="git-head-field" hidden><label for="git-head">目标分支</label><input id="git-head" maxlength="200" value="HEAD"></div>
+      <p id="git-inspection-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="text-button" data-close>取消</button><button type="submit" class="primary" id="run-git-inspection">运行并发到群聊</button></div>
+    </form>
   </dialog>
   <dialog id="source-preview-dialog" aria-labelledby="source-preview-title">
     <div class="dialog-heading"><h2 id="source-preview-title">产物预览</h2><button type="button" class="icon-button" data-close aria-label="关闭预览">×</button></div>

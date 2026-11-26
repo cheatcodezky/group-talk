@@ -236,6 +236,48 @@ test('评审链接仅返回批准材料，发言沿用连接 IP 且无法触发 
   assert.equal((await post('first')).status, 403);
 });
 
+test('只读 Git 检查限本机房主，安全参数的结果可供下一轮讨论使用', async (t) => {
+  const f = await fixture();
+  f.agent.shellRestricted = true;
+  f.agent.canInspectGit = true;
+  const calls = [];
+  f.agent.inspectGit = async (command) => {
+    calls.push(command);
+    return { text: 'M\tdocs/preview.md', truncated: false };
+  };
+  const web = await serve({ room: f.room, host: '127.0.0.1', port: 0 });
+  t.after(async () => { f.room.close(); await web.close(); f.store.close(); });
+  const base = `http://127.0.0.1:${web.port}`;
+  const post = (path, token, input) => fetch(base + path, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify(input),
+  });
+  const path = '/api/git-inspection';
+  const compare = { operation: 'diff', base: 'origin/release7.5.5', head: 'origin/feature/windows-preview-main-2' };
+  assert.equal((await post(path, f.tokens.alice, compare)).status, 403);
+  const remote = await new Promise((resolve, reject) => {
+    const req = request(base + path, {
+      method: 'POST', headers: { host: 'lan.example', 'content-type': 'application/json', authorization: `Bearer ${f.tokens.owner}` },
+    }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject);
+    req.end(JSON.stringify(compare));
+  });
+  assert.equal(remote, 403);
+  assert.equal((await post(path, f.tokens.owner, { operation: 'push' })).status, 400);
+  assert.equal((await post(path, f.tokens.owner, { ...compare, head: '--output=override.txt' })).status, 400);
+  assert.equal(calls.length, 0);
+  const response = await post(path, f.tokens.owner, compare);
+  assert.equal(response.status, 201);
+  const result = await response.json();
+  assert.deepEqual(calls[0].slice(-4), ['--end-of-options', compare.base, compare.head, '--']);
+  assert.equal(result.authorId, f.owner.id);
+  assert.match(result.text, /docs\/preview\.md/);
+  assert.equal(f.store.state.tasks.length, 0);
+  const requested = await (await post('/api/messages', f.tokens.owner, message('基于检查结果比较分支', 'ask'))).json();
+  await until(() => f.store.state.tasks.find(({ id }) => id === requested.task.id)?.status === 'completed');
+  assert.match(f.agent.calls[0].prompt, /docs\/preview\.md/);
+});
+
 test('识别 IPv4 映射地址及各平台邻居记录，仅返回对应 IP 的单一 MAC', () => {
   const ip = '192.168.31.42';
   assert.equal(clientAddress(`::ffff:${ip}`), ip);
