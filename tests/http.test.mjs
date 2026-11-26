@@ -20,6 +20,12 @@ test('HTTP 与两个实时客户端共享同一房间，重连可以恢复消息
     return { response, data: await response.json() };
   };
   assert.equal((await fetch(base)).status, 200);
+  for (const path of ['/rich-text.js', '/server/vendor/marked.mjs']) {
+    const asset = await fetch(base + path);
+    assert.equal(asset.status, 200);
+    assert.match(asset.headers.get('content-type'), /^text\/javascript/);
+    await asset.arrayBuffer();
+  }
   assert.equal((await fetch(base + '/api/bootstrap')).status, 401);
   const collect = async (token) => {
     const controller = new AbortController(); controllers.push(controller);

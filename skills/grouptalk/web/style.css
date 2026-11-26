@@ -37,6 +37,12 @@ dialog{border:1px solid #e4e5de;background:#fcfcfa;border-radius:15px;padding:26
 .side-exchange { padding: 14px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .side-exchange strong { font-size: 13px; }
 .side-exchange .message-content { color: #44434a; font-size: 13px; }
+.message-table { max-width: 100%; margin-block: .6em; overflow-x: auto; }
+.message-table table { width: 100%; border-collapse: collapse; }
+.message-table th, .message-table td { min-width: 6ch; padding: .35em .65em; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.message-table th { background: #ede9f6; }
+.message-table .align-center { text-align: center; }
+.message-table .align-right { text-align: right; }
 .side-answer { margin-top: 8px; background: #f0edf8; border-radius: 9px; padding: 10px 12px; }
 .side-status { margin-top: 6px; }
 .side-link { border: 0; background: transparent; padding: 4px 0; text-align: left; font-size: 12px; color: #6550a7; overflow-wrap: anywhere; }

@@ -14,6 +14,8 @@ import { createReviews } from './reviews.mjs';
 const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const FILES = new Map([['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']], ['/style.css', ['style.css', 'text/css']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
 FILES.set('/side-chat.js', ['side-chat.js', 'text/javascript']);
+FILES.set('/rich-text.js', ['rich-text.js', 'text/javascript']);
+FILES.set('/server/vendor/marked.mjs', ['../server/vendor/marked.mjs', 'text/javascript']);
 function json(res, status, data) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(JSON.stringify(data));

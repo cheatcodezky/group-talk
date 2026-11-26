@@ -1,7 +1,7 @@
 import { setupSideChat } from './side-chat.js';
+import { esc, rich } from './rich-text.js';
 
 const $ = (selector) => document.querySelector(selector);
-const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const time = (stamp) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(stamp));
 // randomUUID requires HTTPS on LAN hosts; getRandomValues also works on local HTTP.
 const newMessageId = () => crypto.randomUUID?.() || Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -28,10 +28,6 @@ async function api(path, data, method = data === undefined ? 'GET' : 'POST') {
 }
 function toast(text) { clearTimeout(toastTimer); $('#toast').textContent = text; $('#toast').hidden = false; toastTimer = setTimeout(() => $('#toast').hidden = true, 5500); }
 function modal(selector) { $(selector).showModal(); }
-function rich(text) {
-  const inline = (line) => esc(line).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  return String(text || '').split(/```[^\n]*\n([\s\S]*?)```/g).map((part, index) => index % 2 ? `<pre><code>${esc(part)}</code></pre>` : part.split(/\n\n+/).filter(Boolean).map((paragraph) => /^#{1,4} /.test(paragraph) && !paragraph.includes('\n') ? `<h3>${inline(paragraph.replace(/^#{1,4} /, ''))}</h3>` : `<p>${inline(paragraph)}</p>`).join('')).join('');
-}
 const memberColor = (id) => Math.max(0, state.members.findIndex((member) => member.id === id)) % 4;
 const avatar = (id, name) => `<span class="avatar color-${memberColor(id)}" aria-hidden="true">${esc([...name][0] || '人')}</span>`;
 const statusLabels = { awaiting_approval: '待房主审批', queued: '等待中', starting: '提交中', running: '进行中', completed: '已完成', cancelled: '已停止', failed: '未完成', needs_review: '需要检查' };
